@@ -1,17 +1,27 @@
-"""Bulk daily prices via yfinance (unofficial Yahoo wrapper) and the metrics we derive from them."""
+"""Daily prices from Stooq (free CSV, no Yahoo) and the metrics we derive from them."""
 from __future__ import annotations
 
 import datetime as dt
+import io
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
+import requests
 
 from . import config as cfg
 
+STOOQ_URL = "https://stooq.com/q/d/l/"
+
+
+class PriceSourceError(RuntimeError):
+    pass
+
 
 def price_metrics(close: pd.Series, volume: pd.Series) -> dict | None:
-    """Pure function: one ticker's daily close/volume → metrics. None if there isn't enough history."""
+    """Pure function: one ticker's daily close/volume -> metrics. None if there isn't enough history."""
     close = pd.to_numeric(close, errors="coerce").dropna()
     if len(close) < 130:
         return None
@@ -34,65 +44,75 @@ def price_metrics(close: pd.Series, volume: pd.Series) -> dict | None:
     }
 
 
-def _split(raw: pd.DataFrame, batch: list[str]):
-    """Yield (ticker, close, volume) from a yf.download frame, whatever shape it came back in."""
-    if raw is None or raw.empty:
-        return
-    if isinstance(raw.columns, pd.MultiIndex):
-        top = set(raw.columns.get_level_values(0))
-        for t in batch:
-            if t in top:
-                sub = raw[t]
-                if "Close" in sub and "Volume" in sub:
-                    yield t, sub["Close"], sub["Volume"]
-    elif len(batch) == 1 and "Close" in raw:
-        yield batch[0], raw["Close"], raw["Volume"]
+def parse_stooq_csv(text: str) -> pd.DataFrame | None:
+    """Stooq CSV (Date,Open,High,Low,Close,Volume) -> DataFrame indexed by date. None for 'no data' replies.
+    Raises PriceSourceError if Stooq answers with something that looks like an access wall instead of data."""
+    head = (text or "").lstrip()[:300]
+    if head.startswith("Date,"):
+        df = pd.read_csv(io.StringIO(text), parse_dates=["Date"]).set_index("Date").sort_index()
+        return df if {"Close", "Volume"} <= set(df.columns) else None
+    low = head.lower()
+    if "apikey" in low or "captcha" in low or "limit" in low:
+        raise PriceSourceError(f"Stooq refused the request: {head[:120]!r}")
+    return None  # 'No data' for an unknown symbol
+
+
+def _fetch_one(sym: str, d1: str, d2: str) -> pd.DataFrame | None:
+    params = {"s": f"{sym.lower()}.us", "i": "d", "d1": d1, "d2": d2}
+    if os.getenv("STOOQ_APIKEY"):
+        params["apikey"] = os.environ["STOOQ_APIKEY"]
+    time.sleep(cfg.PRICE_PAUSE)
+    r = requests.get(STOOQ_URL, params=params, timeout=30, headers={"User-Agent": "trend-crawler/1.0 (personal research)"})
+    r.raise_for_status()
+    return parse_stooq_csv(r.text)
 
 
 def load_prices(tickers: list[str]):
     """Returns (metrics DataFrame indexed by ticker, {ticker: close Series}, as_of date, SPY 6m return)."""
-    import yfinance as yf
+    today = dt.date.today()
+    d1, d2 = (today - dt.timedelta(days=420)).strftime("%Y%m%d"), today.strftime("%Y%m%d")
+    syms = ["SPY"] + list(tickers)
+    frames: dict[str, pd.DataFrame | None] = {}
+    errors = 0
+
+    def work(sym):
+        try:
+            return sym, _fetch_one(sym, d1, d2), None
+        except PriceSourceError:
+            raise
+        except Exception as e:  # network hiccup on one symbol: skip it
+            return sym, None, e
+
+    with ThreadPoolExecutor(max_workers=cfg.PRICE_WORKERS) as ex:
+        for i, (sym, df, err) in enumerate(ex.map(work, syms)):
+            frames[sym] = df
+            errors += err is not None
+            if i == 39 and not any(f is not None for f in frames.values()):
+                raise PriceSourceError("Stooq returned no data for the first 40 symbols; the source is blocked or changed.")
+
+    spy = frames.get("SPY")
+    if spy is None or len(spy) < 130:
+        raise PriceSourceError("Could not load SPY benchmark prices from Stooq.")
+    spy_close = pd.to_numeric(spy["Close"], errors="coerce").dropna()
 
     rows: dict[str, dict] = {}
     closes: dict[str, pd.Series] = {}
-    spy_close = None
-    failed_batches = 0
-    batches = [tickers[i : i + cfg.PRICE_CHUNK] for i in range(0, len(tickers), cfg.PRICE_CHUNK)]
-
-    for i, batch in enumerate(batches):
-        want = (["SPY"] + batch) if i == 0 else batch
-        try:
-            raw = yf.download(
-                want, period="1y", interval="1d", auto_adjust=True,
-                group_by="ticker", threads=True, progress=False,
-            )
-        except Exception as e:  # network hiccup / rate limit: skip this batch, keep going
-            failed_batches += 1
-            print(f"  price batch {i + 1}/{len(batches)} failed: {e!r}")
-            time.sleep(5)
+    for t in tickers:
+        f = frames.get(t)
+        if f is None:
             continue
-        for t, c, v in _split(raw, want):
-            if t == "SPY":
-                spy_close = pd.to_numeric(c, errors="coerce").dropna()
-                continue
-            m = price_metrics(c, v)
-            if m:
-                rows[t] = m
-                closes[t] = pd.to_numeric(c, errors="coerce").dropna()
-        time.sleep(1.0)
-
-    if spy_close is None or len(spy_close) < 130:
-        raise RuntimeError("Could not load SPY benchmark prices — Yahoo may be rate-limiting or down.")
+        m = price_metrics(f["Close"], f["Volume"])
+        if m:
+            rows[t] = m
+            closes[t] = pd.to_numeric(f["Close"], errors="coerce").dropna()
     if not rows:
-        raise RuntimeError("No price data came back for any ticker.")
+        raise PriceSourceError("No usable price history came back for any ticker.")
 
     as_of: dt.date = pd.Timestamp(spy_close.index[-1]).date()
     spy_6m = float(spy_close.iloc[-1] / spy_close.iloc[-127] - 1)
-
     df = pd.DataFrame.from_dict(rows, orient="index")
-    # Drop stale quotes (halted / delisted): last bar more than 5 days behind the benchmark.
-    df = df[df["last_date"].map(lambda d: (as_of - d).days <= 5)]
+    df = df[df["last_date"].map(lambda d: (as_of - d).days <= 5)]  # drop stale quotes (halted / delisted)
     df["rs_6m"] = df["ret_6m"] - spy_6m
     closes = {t: closes[t] for t in df.index}
-    print(f"  priced {len(df)} tickers, as_of {as_of}, failed batches {failed_batches}")
+    print(f"  priced {len(df)} of {len(tickers)} tickers, as_of {as_of}, request errors {errors}")
     return df, closes, as_of, spy_6m

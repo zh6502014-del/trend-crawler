@@ -43,7 +43,7 @@ def from_sec() -> pd.DataFrame:
     df = pd.DataFrame(j["data"], columns=j["fields"])  # cik, name, ticker, exchange
     ex = df["exchange"].fillna("").str.lower()
     keep = (ex == "nasdaq") | (ex.str.startswith("nyse") & ~ex.str.contains("arca"))
-    return _tidy(df[keep][["ticker", "name", "exchange"]])
+    return _tidy(df[keep][["ticker", "name", "exchange", "cik"]])
 
 
 def get_universe() -> pd.DataFrame:

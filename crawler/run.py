@@ -58,14 +58,20 @@ def run_public(store) -> dict:
     stats["gated"] = len(gate)
     print(f"gated by price/volume: {len(gate)}")
 
-    fund, fstats = fundamentals.refresh_cache(store, list(gate.index))
+    ciks = dict(zip(uni["ticker"], uni["cik"])) if "cik" in uni else {}
+    fund, fstats = fundamentals.refresh_cache(store, list(gate.index), ciks=ciks)
     stats["fundamentals"] = {**fstats, "usable": len(fund)}
     print(f"fundamentals: {stats['fundamentals']}")
 
     f = pd.DataFrame.from_dict(fund, orient="index")
     if f.empty:
-        raise RuntimeError("No usable fundamentals yet (first run, or Yahoo is rate-limiting). Try again later.")
+        raise RuntimeError("No usable fundamentals yet (first run, or the SEC is rate-limiting). Try again later.")
     df = gate.join(f, how="inner")
+    shares = pd.to_numeric(df["shares_out"], errors="coerce") if "shares_out" in df else pd.Series(np.nan, index=df.index)
+    cap = df["price"] * shares  # market cap = today's price x shares on the latest filing cover
+    if "mkt_cap" in df:
+        cap = cap.fillna(pd.to_numeric(df["mkt_cap"], errors="coerce"))
+    df["mkt_cap"] = cap
     for c in _NUMERIC:  # a column that is entirely missing arrives as object dtype; make it numeric
         df[c] = pd.to_numeric(df[c], errors="coerce") if c in df else np.nan
     df = score.scorable(df)

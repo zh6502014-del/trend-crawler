@@ -27,7 +27,9 @@ FUNDAMENTALS_TTL_DAYS = 7
 MAX_REFRESH_PER_RUN = int(os.getenv("MAX_REFRESH_PER_RUN", "400"))
 if os.getenv("FULL_REFRESH") == "1":
     MAX_REFRESH_PER_RUN = 5000
-REQUEST_PAUSE = 0.25           # seconds between per-ticker Yahoo calls
+REQUEST_PAUSE = 0.15           # seconds between per-company SEC calls (SEC allows 10 req/s)
+PRICE_PAUSE = 0.1              # seconds each price worker waits before a Stooq request
+PRICE_WORKERS = 4              # parallel Stooq requests
 RATE_LIMIT_ABORT_AFTER = 15    # consecutive failures before we stop hammering the source
 PRICE_CHUNK = 150
 PRICE_SERIES_TOP_N = 250       # tickers per run that get a stored price series for the detail chart
@@ -38,7 +40,8 @@ PRICE_SERIES_TOP_N = 250       # tickers per run that get a stored price series 
 GROWTH_W = {"rev_yoy": 0.6, "rs_6m": 0.4}
 VALIDATED_W = {"streak": 0.6, "gross_margin": 0.4}
 PILLAR_W = {"growth": 1.0, "validated": 1.0, "accessibility": 1.0}
-ATTENTION_W = {"analyst_count": 0.4, "inst_pct": 0.3, "hn_mentions": 0.3}
+# analyst_count / inst_pct are not available from SEC data (weight 0). Crowding = Hacker News + trading activity.
+ATTENTION_W = {"analyst_count": 0.0, "inst_pct": 0.0, "hn_mentions": 0.5, "dollar_vol": 0.5}
 CROWD_WEIGHT = 0.6            # 0 = ignore attention, 1 = fully-crowded names score zero
 MISSING_PCT = 0.25            # percentile assigned to a missing growth/quality metric (missing is not neutral)
 FLOOR = 0.02                  # keeps log() finite
@@ -46,7 +49,7 @@ FLOOR = 0.02                  # keeps log() finite
 # ── Flags ───────────────────────────────────────────────────────────────────
 RUNWAY_MONTHS_WARN = 12
 DEEP_LOSS_MARGIN = -0.5       # net margin below -50%
-HIGH_DEBT_TO_EQUITY = 200     # Yahoo reports this as a percentage
+HIGH_DEBT_TO_EQUITY = 200     # long-term debt / equity, as a percentage
 DILUTION_WARN = 0.15          # share count up >15% vs ~6 months ago
 CROWDED_ATTENTION = 80        # attention score (0-100) at/above this
 DILUTION_LOOKBACK_DAYS = 180
