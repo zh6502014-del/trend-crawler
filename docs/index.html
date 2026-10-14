@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex, nofollow">
+  <title>趨勢爬蟲</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='16' width='5' height='13' rx='2' fill='%2314b08b'/%3E%3Crect x='11' y='10' width='5' height='19' rx='2' fill='%234d6ef0'/%3E%3Crect x='19' y='6' width='5' height='23' rx='2' fill='%23e8921c'/%3E%3Crect x='27' y='20' width='3' height='9' rx='1.5' fill='%23e5465c'/%3E%3C/svg%3E">
+
+  <!-- Libraries, all MIT-licensed, pinned to exact versions (no build step). -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <script defer src="config.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="top glass">
+    <h1>趨勢爬蟲</h1>
+    <div class="top-right">
+      <div id="status" class="pill" hidden><span class="dot"></span><span id="status-text"></span></div>
+      <button id="signout" class="btn ghost" hidden>登出</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Login (private mode) -->
+    <section id="login" class="card glass strong" hidden>
+      <h2>登入以檢視</h2>
+      <p class="muted">輸入你的 Email，我們會寄一個登入連結給你。</p>
+      <form id="login-form" autocomplete="email">
+        <input id="login-email" type="email" required placeholder="you@example.com" aria-label="Email">
+        <button class="btn primary" type="submit">寄送登入連結</button>
+      </form>
+      <p id="login-msg" class="muted" role="status"></p>
+    </section>
+
+    <!-- Setup / error messages -->
+    <section id="notice" class="card glass strong" hidden></section>
+
+    <div id="app" hidden>
+      <div class="controls">
+        <div class="seg glass" role="tablist" aria-label="清單">
+          <button role="tab" data-tab="main" aria-selected="true">主榜</button>
+          <button role="tab" data-tab="watch" aria-selected="false">觀察清單</button>
+          <button role="tab" data-tab="raise" aria-selected="false">未上市募資</button>
+        </div>
+
+        <div class="filters" id="filters-stock">
+          <input id="f-q" class="field glass" type="search" placeholder="搜尋代號或公司" aria-label="搜尋代號或公司">
+          <select id="f-sector" class="field glass" aria-label="產業"><option value="">全部產業</option></select>
+          <label class="field glass range">
+            <span>最低分數</span>
+            <input id="f-min" type="range" min="0" max="80" step="5" value="0">
+            <output id="f-min-out">0</output>
+          </label>
+          <label class="field glass check"><input id="f-risk" type="checkbox"> 隱藏高風險標記</label>
+        </div>
+
+        <div class="filters" id="filters-raise" hidden>
+          <input id="r-q" class="field glass" type="search" placeholder="搜尋公司" aria-label="搜尋公司">
+          <label class="field glass check"><input id="r-open" type="checkbox" checked> 只看募資中</label>
+        </div>
+
+        <span id="count" class="muted count" role="status"></span>
+      </div>
+
+      <div id="banner" class="banner" hidden></div>
+
+      <section class="board glass strong">
+        <div id="tbl-stock"></div>
+        <div id="tbl-raise" hidden></div>
+      </section>
+
+      <section id="legend-stock" class="legend">
+        <p class="muted">每檔右側的四根細條是它的分數結構，由左到右：</p>
+        <ul>
+          <li><i class="sw g0"></i><b>成長</b> 營收與相對強度往上走的速度</li>
+          <li><i class="sw g1"></i><b>驗證</b> 成長是不是真的：連續季增與毛利率</li>
+          <li><i class="sw g2"></i><b>進場</b> 小額資金買得到、賣得掉嗎</li>
+          <li><i class="sw g3"></i><b>擁擠</b> 越高代表越多人已經注意到，會扣分</li>
+        </ul>
+      </section>
+      <section id="legend-raise" class="legend" hidden>
+        <p class="muted">Form C 申報不等於正在募資，請以截止日與募資平台頁面為準。非合格投資人有年度投資金額上限，早期公司可能完全歸零。</p>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <p class="muted">研究線索，不是投資建議。資料來自 Yahoo Finance（透過 yfinance）、SEC EDGAR 與 Hacker News，可能延遲或有誤，請回到原始來源確認。</p>
+  </footer>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <aside id="drawer" class="drawer glass strong" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
+    <button id="drawer-close" class="btn ghost close" aria-label="關閉">✕</button>
+    <div id="drawer-body"></div>
+  </aside>
+</body>
+</html>
