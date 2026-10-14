@@ -28,8 +28,7 @@ MAX_REFRESH_PER_RUN = int(os.getenv("MAX_REFRESH_PER_RUN", "400"))
 if os.getenv("FULL_REFRESH") == "1":
     MAX_REFRESH_PER_RUN = 5000
 REQUEST_PAUSE = 0.15           # seconds between per-company SEC calls (SEC allows 10 req/s)
-PRICE_PAUSE = 0.1              # seconds each price worker waits before a Stooq request
-PRICE_WORKERS = 4              # parallel Stooq requests
+PRICE_PAUSE = 12.5             # seconds between price-API calls (free plan: 5 calls/minute)
 RATE_LIMIT_ABORT_AFTER = 15    # consecutive failures before we stop hammering the source
 PRICE_CHUNK = 150
 PRICE_SERIES_TOP_N = 250       # tickers per run that get a stored price series for the detail chart

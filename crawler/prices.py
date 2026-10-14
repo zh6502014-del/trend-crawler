@@ -1,11 +1,13 @@
-"""Daily prices from Stooq (free CSV, no Yahoo) and the metrics we derive from them."""
+"""Daily prices from Massive (formerly Polygon.io) free plan, and the metrics we derive from them.
+
+The "grouped daily" endpoint returns OHLCV for EVERY US stock on one date in a single call, so ~150 trading days of
+history for the whole market costs ~150 calls (the free plan allows 5 calls/minute, so ~30 minutes per run).
+"""
 from __future__ import annotations
 
 import datetime as dt
-import io
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -13,7 +15,8 @@ import requests
 
 from . import config as cfg
 
-STOOQ_URL = "https://stooq.com/q/d/l/"
+GROUPED_URL = "https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}"
+HISTORY_DAYS = 215   # calendar days (~150 trading days)
 
 
 class PriceSourceError(RuntimeError):
@@ -44,67 +47,69 @@ def price_metrics(close: pd.Series, volume: pd.Series) -> dict | None:
     }
 
 
-def parse_stooq_csv(text: str) -> pd.DataFrame | None:
-    """Stooq CSV (Date,Open,High,Low,Close,Volume) -> DataFrame indexed by date. None for 'no data' replies.
-    Raises PriceSourceError if Stooq answers with something that looks like an access wall instead of data."""
-    head = (text or "").lstrip()[:300]
-    if head.startswith("Date,"):
-        df = pd.read_csv(io.StringIO(text), parse_dates=["Date"]).set_index("Date").sort_index()
-        return df if {"Close", "Volume"} <= set(df.columns) else None
-    low = head.lower()
-    if "apikey" in low or "captcha" in low or "limit" in low or "access denied" in low:
-        raise PriceSourceError(f"Stooq refused the request ({head[:60]!r}). Stooq now needs a free apikey: set the STOOQ_APIKEY secret.")
-    return None  # 'No data' for an unknown symbol
+def parse_grouped(payload: dict) -> list[dict]:
+    """One grouped-daily response -> [{T, c, v}]. Empty list on holidays."""
+    return [{"T": r["T"], "c": r.get("c"), "v": r.get("v")} for r in (payload.get("results") or []) if r.get("T")]
 
 
-def _fetch_one(sym: str, d1: str, d2: str) -> pd.DataFrame | None:
-    params = {"s": f"{sym.lower()}.us", "i": "d", "d1": d1, "d2": d2}
-    if os.getenv("STOOQ_APIKEY"):
-        params["apikey"] = os.environ["STOOQ_APIKEY"]
-    time.sleep(cfg.PRICE_PAUSE)
-    r = requests.get(STOOQ_URL, params=params, timeout=30, headers={"User-Agent": "trend-crawler/1.0 (personal research)"})
-    r.raise_for_status()
-    return parse_stooq_csv(r.text)
+def _fetch_day(session, day: dt.date, key: str):
+    """Returns list of bars, [] for market holidays, raises PriceSourceError on auth/plan problems."""
+    for attempt in range(4):
+        r = session.get(GROUPED_URL.format(day=day.isoformat()), params={"adjusted": "true", "apiKey": key}, timeout=60)
+        if r.status_code == 429:  # free plan: 5 calls/minute
+            time.sleep(15 * (attempt + 1))
+            continue
+        if r.status_code in (401, 403):
+            raise PriceSourceError(f"Price API refused the request ({r.status_code}): check MASSIVE_API_KEY / plan. {r.text[:150]}")
+        r.raise_for_status()
+        return parse_grouped(r.json())
+    raise PriceSourceError("Price API kept rate-limiting us (429).")
+
+
+def frames_from_bars(by_day: dict[dt.date, list[dict]], tickers: list[str]):
+    """{day: bars} -> (close DataFrame, volume DataFrame), columns = SPY + wanted tickers."""
+    want = set(tickers) | {"SPY"}
+    close: dict[dt.date, dict] = {}
+    vol: dict[dt.date, dict] = {}
+    for d, bars in by_day.items():
+        if not bars:
+            continue
+        close[d] = {b["T"]: b["c"] for b in bars if b["T"] in want and b["c"] is not None}
+        vol[d] = {b["T"]: b["v"] for b in bars if b["T"] in want and b["v"] is not None}
+    c = pd.DataFrame.from_dict(close, orient="index").sort_index()
+    v = pd.DataFrame.from_dict(vol, orient="index").sort_index()
+    c.index = pd.to_datetime(c.index)
+    v.index = pd.to_datetime(v.index)
+    return c, v
 
 
 def load_prices(tickers: list[str]):
     """Returns (metrics DataFrame indexed by ticker, {ticker: close Series}, as_of date, SPY 6m return)."""
+    key = os.getenv("MASSIVE_API_KEY") or os.getenv("POLYGON_API_KEY")
+    if not key:
+        raise PriceSourceError("MASSIVE_API_KEY is not set (free key from massive.com).")
     today = dt.date.today()
-    d1, d2 = (today - dt.timedelta(days=420)).strftime("%Y%m%d"), today.strftime("%Y%m%d")
-    syms = ["SPY"] + list(tickers)
-    frames: dict[str, pd.DataFrame | None] = {}
-    errors = 0
-
-    def work(sym):
-        try:
-            return sym, _fetch_one(sym, d1, d2), None
-        except PriceSourceError:
-            raise
-        except Exception as e:  # network hiccup on one symbol: skip it
-            return sym, None, e
-
-    with ThreadPoolExecutor(max_workers=cfg.PRICE_WORKERS) as ex:
-        for i, (sym, df, err) in enumerate(ex.map(work, syms)):
-            frames[sym] = df
-            errors += err is not None
-            if i == 39 and not any(f is not None for f in frames.values()):
-                raise PriceSourceError("Stooq returned no data for the first 40 symbols; the source is blocked or changed.")
-
-    spy = frames.get("SPY")
-    if spy is None or len(spy) < 130:
-        raise PriceSourceError("Could not load SPY benchmark prices from Stooq.")
-    spy_close = pd.to_numeric(spy["Close"], errors="coerce").dropna()
+    days = [today - dt.timedelta(days=i) for i in range(1, HISTORY_DAYS) if (today - dt.timedelta(days=i)).weekday() < 5]
+    by_day: dict[dt.date, list[dict]] = {}
+    s = requests.Session()
+    for i, d in enumerate(sorted(days)):
+        by_day[d] = _fetch_day(s, d, key)
+        if i < len(days) - 1:
+            time.sleep(cfg.PRICE_PAUSE)
+    close, volume = frames_from_bars(by_day, tickers)
+    if "SPY" not in close or close["SPY"].dropna().shape[0] < 130:
+        raise PriceSourceError("Could not load enough SPY benchmark history from the price API.")
+    spy_close = close["SPY"].dropna()
 
     rows: dict[str, dict] = {}
     closes: dict[str, pd.Series] = {}
     for t in tickers:
-        f = frames.get(t)
-        if f is None:
+        if t not in close:
             continue
-        m = price_metrics(f["Close"], f["Volume"])
+        m = price_metrics(close[t], volume[t] if t in volume else pd.Series(dtype=float))
         if m:
             rows[t] = m
-            closes[t] = pd.to_numeric(f["Close"], errors="coerce").dropna()
+            closes[t] = close[t].dropna()
     if not rows:
         raise PriceSourceError("No usable price history came back for any ticker.")
 
@@ -114,5 +119,5 @@ def load_prices(tickers: list[str]):
     df = df[df["last_date"].map(lambda d: (as_of - d).days <= 5)]  # drop stale quotes (halted / delisted)
     df["rs_6m"] = df["ret_6m"] - spy_6m
     closes = {t: closes[t] for t in df.index}
-    print(f"  priced {len(df)} of {len(tickers)} tickers, as_of {as_of}, request errors {errors}")
+    print(f"  priced {len(df)} of {len(tickers)} tickers, as_of {as_of}, {len(days)} days fetched")
     return df, closes, as_of, spy_6m
