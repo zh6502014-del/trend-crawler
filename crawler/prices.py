@@ -52,8 +52,8 @@ def parse_stooq_csv(text: str) -> pd.DataFrame | None:
         df = pd.read_csv(io.StringIO(text), parse_dates=["Date"]).set_index("Date").sort_index()
         return df if {"Close", "Volume"} <= set(df.columns) else None
     low = head.lower()
-    if "apikey" in low or "captcha" in low or "limit" in low:
-        raise PriceSourceError(f"Stooq refused the request: {head[:120]!r}")
+    if "apikey" in low or "captcha" in low or "limit" in low or "access denied" in low:
+        raise PriceSourceError(f"Stooq refused the request ({head[:60]!r}). Stooq now needs a free apikey: set the STOOQ_APIKEY secret.")
     return None  # 'No data' for an unknown symbol
 
 

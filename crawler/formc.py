@@ -124,7 +124,7 @@ def _daily_index_url(day: dt.date) -> str:
 def _get(session: requests.Session, url: str):
     time.sleep(cfg.SEC_PAUSE)
     r = session.get(url, timeout=60)
-    if r.status_code == 404:
+    if r.status_code in (403, 404):  # EDGAR answers 403 for files that do not exist (e.g. today's index before it is built)
         return None
     r.raise_for_status()
     return r
@@ -151,6 +151,8 @@ def run_formc(store, today: dt.date | None = None) -> dict:
         stats["days_ok"] += 1
         filings += parse_master_idx(r.text)
     stats["listed"] = len(filings)
+    if stats["days_ok"] == 0:
+        raise RuntimeError("EDGAR daily index unreachable for every day (blocked or User-Agent rejected?)")
 
     rows = []
     for f in filings:
