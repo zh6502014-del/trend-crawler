@@ -43,7 +43,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-          STOOQ_APIKEY: ${{ secrets.STOOQ_APIKEY }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
           ONLY: ${{ inputs.only }}
           FULL_REFRESH: ${{ inputs.full_refresh && '1' || '' }}
         run: python -m crawler.run
