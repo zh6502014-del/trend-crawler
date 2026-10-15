@@ -59,6 +59,8 @@ def _fetch_day(session, day: dt.date, key: str):
         if r.status_code == 429:  # free plan: 5 calls/minute
             time.sleep(15 * (attempt + 1))
             continue
+        if r.status_code == 403 and "before end of day" in r.text.lower():
+            return []  # that day is not published yet (free plan): skip it, the previous day becomes as_of
         if r.status_code in (401, 403):
             raise PriceSourceError(f"Price API refused the request ({r.status_code}): check MASSIVE_API_KEY / plan. {r.text[:150]}")
         r.raise_for_status()

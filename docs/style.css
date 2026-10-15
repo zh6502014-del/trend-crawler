@@ -343,3 +343,10 @@ select.field option { color: #131a2f; background: #fff; }
 .views .vnote { font-size: 12px; color: var(--muted); }
 .quality { font-size: 12.5px; margin: 0 0 10px; line-height: 1.5; }
 .why { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+
+/* table rows: cells are display:flex (for vertical centring), so the row itself must be a flex row,
+   and Tabulator's own white table background must not show through. */
+.tabulator .tabulator-tableholder .tabulator-table { background: transparent !important; }
+.tabulator .tabulator-row { display: flex !important; align-items: stretch; }
+.tabulator .tabulator-row .tabulator-cell { flex: none; }
+.tabulator .tabulator-row .tabulator-col-resize-handle { display: none; }
