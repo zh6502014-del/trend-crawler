@@ -350,3 +350,5 @@ select.field option { color: #131a2f; background: #fff; }
 .tabulator .tabulator-row { display: flex !important; align-items: stretch; }
 .tabulator .tabulator-row .tabulator-cell { flex: none; }
 .tabulator .tabulator-row .tabulator-col-resize-handle { display: none; }
+
+.tabulator .tabulator-row .tabulator-cell { gap: 6px; }
