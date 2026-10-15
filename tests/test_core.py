@@ -556,3 +556,30 @@ def test_run_smart_dedupes_accessions_listed_twice():
     text = "x\n-----\n111|ACME|SC 13D|20261012|edgar/data/111/0000000001-26-000001.txt\n222|HOLDER LP|SC 13D|20261012|edgar/data/111/0000000001-26-000001.txt\n"
     rows = smartmoney.parse_index(text, {"111", "222"})
     assert len({r["accession"] for r in rows}) == 1 and len(rows) == 2
+
+
+def test_line_budget_fails_closed_and_respects_ceiling():
+    from crawler import digest
+
+    class R:
+        def __init__(self, data, bad=False):
+            self.data, self.bad = data, bad
+        def raise_for_status(self):
+            if self.bad:
+                raise RuntimeError("boom")
+        def json(self):
+            return self.data
+
+    def sess(quota, used, bad=False):
+        class S:
+            def get(self, url, **kw):
+                return R(quota if url.endswith("/quota") else used, bad)
+        return S()
+
+    assert digest.line_budget_ok("t", sess({"type": "limited", "value": 200}, {"totalUsage": 10}))[0] is True
+    assert digest.line_budget_ok("t", sess({"type": "limited", "value": 200}, {"totalUsage": 99}))[0] is True
+    assert digest.line_budget_ok("t", sess({"type": "limited", "value": 200}, {"totalUsage": 100}))[0] is False   # our cap of 100
+    assert digest.line_budget_ok("t", sess({"type": "limited", "value": 110}, {"totalUsage": 90}))[0] is False    # limit - reserve = 90
+    assert digest.line_budget_ok("t", sess({"type": "none"}, {"totalUsage": 0}))[0] is False                       # unlimited/paid plan
+    assert digest.line_budget_ok("t", sess({"type": "limited", "value": 200}, {"totalUsage": 1}, bad=True))[0] is False
+    assert digest.line_budget_ok("t", sess({"type": "limited", "value": 200}, {}))[0] is False                    # missing usage

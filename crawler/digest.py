@@ -49,6 +49,34 @@ def send_telegram(text: str, token: str, chat_id: str) -> None:
     r.raise_for_status()
 
 
+LINE_MONTHLY_CAP = int(os.getenv("LINE_MONTHLY_CAP", "100"))   # our own ceiling, well under the free quota
+LINE_RESERVE = 20                                                # always keep this many messages of the plan unused
+
+
+def line_budget_ok(token: str, session=None) -> tuple[bool, str]:
+    """Ask LINE how many messages this month's plan allows and how many are used. Fail CLOSED: any doubt means do not send.
+
+    Sends only on a plan with a hard monthly limit (the free plan), never on an unlimited / pay-per-message plan,
+    and only while usage + 1 stays under min(LINE_MONTHLY_CAP, limit - LINE_RESERVE).
+    """
+    sess = session or requests
+    h = {"Authorization": f"Bearer {token}"}
+    try:
+        q = sess.get("https://api.line.me/v2/bot/message/quota", headers=h, timeout=30)
+        q.raise_for_status()
+        u = sess.get("https://api.line.me/v2/bot/message/quota/consumption", headers=h, timeout=30)
+        u.raise_for_status()
+        quota, used = q.json(), int(u.json().get("totalUsage"))
+    except Exception as e:  # noqa: BLE001
+        return False, f"quota check failed ({str(e)[:80]}), not sending"
+    if quota.get("type") != "limited" or not isinstance(quota.get("value"), int):
+        return False, f"plan is not a hard-limited one ({quota.get('type')}), not sending"
+    ceiling = min(LINE_MONTHLY_CAP, quota["value"] - LINE_RESERVE)
+    if used + 1 > ceiling:
+        return False, f"used {used} of ceiling {ceiling} (plan limit {quota['value']}), not sending"
+    return True, f"used {used} of ceiling {ceiling}"
+
+
 def send_line(text: str, token: str, user_id: str) -> None:
     """LINE Messaging API push to one user (LINE Notify was shut down in 2025)."""
     r = requests.post("https://api.line.me/v2/bot/message/push",
@@ -84,6 +112,11 @@ def run_digest(store, today: dt.date | None = None) -> dict:
         if not ok:
             continue
         try:
+            if name == "line":
+                ok, why = line_budget_ok(line_token)
+                print(f"  digest: line budget: {why}")
+                if not ok:
+                    continue
             fn()
             sent.append(name)
         except Exception as e:  # noqa: BLE001 - a failed notification must not fail the crawl
