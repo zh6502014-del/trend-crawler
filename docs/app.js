@@ -528,7 +528,7 @@
         { title: '風險標記', field: 'flags', minWidth: 170, widthGrow: 2, headerSort: false, responsive: 6, formatter: (c) => chips(c.getValue()) },
       ],
     });
-    t.on('tableBuilt', () => { state.stockReady = true; applyFilters(); });
+    t.on('tableBuilt', () => { state.stockReady = true; applyFilters(); openFromLink(); });
     t.on('rowClick', (_e, row) => openStock(row.getData()));
     state.stockTable = t;
   }
@@ -625,6 +625,15 @@
       <div class="meter g${i}"><i style="width:${clamp(val)}%"></i></div><p>${text}</p>${why ? `<p class="why">${why}</p>` : ''}</div>`;
   }
   const beats = (v) => (isNum(v) ? `在今天被評分的股票裡，約贏過 ${Math.round(clamp(v))}% 的同類。` : '');
+
+  // Deep link from the LINE bot: index.html#t=NRXS opens that stock's drawer once the table is ready.
+  function openFromLink() {
+    const m = /(?:^|[#&])t=([A-Za-z0-9.\-]{1,8})/.exec(location.hash || '');
+    if (!m || state.linkDone) return;
+    state.linkDone = true;
+    const d = (state.rows || []).find((r) => r.ticker === m[1].toUpperCase());
+    if (d) openStock(d);
+  }
 
   function openStock(d) {
     state.current = d.ticker;
