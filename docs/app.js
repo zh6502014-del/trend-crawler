@@ -54,8 +54,8 @@
 
   const state = {
     sb: null, started: false, rows: [], raises: [], run: null,
-    tab: 'main', q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
-    maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, portal: '', soon: false, view: 'all', saved: [],
+    watch: new Map(), tab: 'main', q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
+    maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, watchOnly: false, portal: '', soon: false, view: 'all', saved: [],
     stockTable: null, raiseTable: null, stockReady: false, raiseReady: false,
     charts: [], current: null, lastFocus: null,
   };
@@ -151,6 +151,10 @@
         const by = new Map(sm.map((x) => [x.ticker, x]));
         rows.forEach((r) => { r.smart = by.get(r.ticker) || null; r.smart_score = r.smart ? r.smart.score : 0; });
       } catch (e) { rows.forEach((r) => { r.smart = null; r.smart_score = 0; }); }
+      try {
+        const w = await pageAll((a, b) => sb.from('user_watch').select('ticker,note').range(a, b));
+        state.watch = new Map(w.map((x) => [x.ticker, x.note || '']));
+      } catch (e) { state.watch = new Map(); }
       state.raises = raises;
       state.run = runRes.data?.[0] || null;
     } catch (e) {
@@ -218,7 +222,7 @@
   }
 
   // ── quick views (built-in + saved in this browser) ──────────────────────
-  const BASE = { q: '', sector: '', minScore: 0, hideRisk: false, maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false };
+  const BASE = { q: '', sector: '', minScore: 0, hideRisk: false, maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, watchOnly: false };
   const PRESETS = [
     { id: 'all', label: '全部', f: {} },
     { id: 'streak', label: '連續 3 季以上成長', f: { minStreak: 3 } },
@@ -236,6 +240,7 @@
     $('#f-min-out').textContent = state.minScore;
     $('#f-risk').checked = state.hideRisk;
     $('#f-smart').checked = state.smartOnly;
+    $('#f-watch').checked = state.watchOnly;
     renderViews();
     applyFilters();
   }
@@ -275,7 +280,7 @@
         const name = $('#view-name').value.trim();
         if (!name) { $('#view-name').focus(); return; }
         const list = store.get('tc_views') || [];
-        list.push({ label: name, f: { q: state.q, sector: state.sector, minScore: state.minScore, hideRisk: state.hideRisk, maxCap: state.maxCap, minStreak: state.minStreak, onlyNew: state.onlyNew, smartOnly: state.smartOnly } });
+        list.push({ label: name, f: { q: state.q, sector: state.sector, minScore: state.minScore, hideRisk: state.hideRisk, maxCap: state.maxCap, minStreak: state.minStreak, onlyNew: state.onlyNew, smartOnly: state.smartOnly, watchOnly: state.watchOnly } });
         store.set('tc_views', list.slice(-8));
         state.view = 's' + (Math.min(list.length, 8) - 1);
         renderViews();
@@ -309,6 +314,7 @@
     $('#f-min').addEventListener('input', (e) => { state.minScore = +e.target.value; $('#f-min-out').textContent = e.target.value; applyFilters(); });
     $('#f-risk').addEventListener('change', (e) => { state.hideRisk = e.target.checked; applyFilters(); });
     $('#f-smart').addEventListener('change', (e) => { state.smartOnly = e.target.checked; applyFilters(); });
+    $('#f-watch').addEventListener('change', (e) => { state.watchOnly = e.target.checked; applyFilters(); });
     $('#r-q').addEventListener('input', (e) => { state.rq = e.target.value; applyFilters(); });
     $('#r-open').addEventListener('change', (e) => { state.ropen = e.target.checked; applyFilters(); });
 
@@ -325,7 +331,17 @@
   function setTab(tab) {
     state.tab = tab;
     $$('.seg button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+    const rep = tab === 'report' || tab === 'heat';
     const raise = tab === 'raise';
+    $('#report').hidden = tab !== 'report';
+    $('#heat').hidden = tab !== 'heat';
+    $('.board').hidden = rep;
+    $('#count').hidden = rep;
+    if (rep) {
+      ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise'].forEach((q) => { $(q).hidden = true; });
+      if (tab === 'report') loadReport(); else renderHeat();
+      return;
+    }
     $('#tbl-stock').hidden = raise;
     $('#tbl-raise').hidden = !raise;
     $('#filters-stock').hidden = raise;
@@ -334,10 +350,72 @@
     $('#quality').hidden = raise;
     $('#legend-stock').hidden = raise;
     $('#legend-raise').hidden = !raise;
+    $('#count').hidden = false;
     // Tabulator builds asynchronously: only touch a table once its 'tableBuilt' event has fired.
     if (raise) { buildRaiseTable(); if (state.raiseReady) state.raiseTable.redraw(true); }
     else if (state.stockReady) state.stockTable.redraw(true);
     applyFilters();
+  }
+
+  // ── pillar heatmap ──────────────────────────────────────────────────────
+  function renderHeat() {
+    const top = state.rows.filter((r) => r.board === 'main').sort((a, b) => a.rank - b.rank).slice(0, 40);
+    const cols = [['growth', '成長'], ['validated', '驗證'], ['accessibility', '進場'], ['cool', '冷門度'], ['smart_score', '大戶']];
+    const val = (d, k) => (k === 'cool' ? (isNum(d.attention) ? 100 - d.attention : null) : d[k]);
+    const cell = (v) => (isNum(v)
+      ? `<td style="background:color-mix(in srgb, var(--valid) ${Math.round(clamp(v) * 0.85)}%, transparent)">${Math.round(v)}</td>`
+      : '<td class="muted">—</td>');
+    const rows = top.map((d) => `<tr data-t="${esc(d.ticker)}" tabindex="0"><th>${nf(d.rank)}</th><th class="l"><b>${esc(d.ticker)}</b> <span class="muted">${esc((d.name || '').slice(0, 22))}</span></th>${cols.map(([k]) => cell(val(d, k))).join('')}<td><b>${nf(d.score, 1)}</b></td></tr>`).join('');
+    $('#heat-body').innerHTML = `<h3>前 40 名的四個面向</h3><p class="muted">顏色越深，這一項越強。「冷門度」是擁擠的反面，越高代表越少人注意。點任一列看詳情。</p>
+      <div class="heat-scroll"><table class="heat"><thead><tr><th>#</th><th class="l">股票</th>${cols.map(([, l]) => `<th>${l}</th>`).join('')}<th>總分</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    $$('#heat-body tbody tr').forEach((tr) => {
+      const open = () => { const d = state.rows.find((r) => r.ticker === tr.dataset.t); if (d) openStock(d); };
+      tr.addEventListener('click', open);
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+    });
+  }
+
+  // ── report card ─────────────────────────────────────────────────────────
+  const pct1 = (v) => (isNum(v) ? (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%' : '—');
+  async function loadReport() {
+    const box = $('#report-body');
+    if (state.reportLoaded) return;
+    let rows = [];
+    try {
+      rows = await pageAll((a, b) => state.sb.from('report_card').select('*').order('as_of', { ascending: false }).range(a, b));
+    } catch (e) { rows = null; }
+    state.reportLoaded = true;
+    if (rows === null) { box.innerHTML = '<p class="muted">成績單的資料表還不存在，請先在 Supabase 執行最新的 schema.sql。</p>'; return; }
+    if (!rows.length) {
+      box.innerHTML = '<h3>歷史成績單</h3><p class="muted">還在累積中。每天收盤後記錄主榜前 20 名，滿 5 個與 20 個交易日後，這裡會顯示它們的平均報酬、對比 SPY 的超額報酬，以及打敗 SPY 的比例。第一筆大約要等一週。</p>';
+      return;
+    }
+    const cards = [5, 20].map((hz) => {
+      const r = rows.filter((x) => x.horizon === hz);
+      if (!r.length) return `<div class="rc-card"><h4>${hz} 個交易日後</h4><p class="muted">尚無足夠資料</p></div>`;
+      const avg = (k) => r.reduce((s, x) => s + Number(x[k]), 0) / r.length;
+      const win = r.filter((x) => Number(x.excess) > 0).length / r.length;
+      return `<div class="rc-card"><h4>${hz} 個交易日後</h4>
+        <div class="rc-big ${avg('excess') >= 0 ? 'up' : 'down'}">${pct1(avg('excess'))}</div>
+        <div class="muted">平均超額報酬（對比 SPY）</div>
+        <ul><li>平均報酬 ${pct1(avg('avg_ret'))}，SPY ${pct1(avg('spy_ret'))}</li>
+        <li>${r.length} 份榜單中，${Math.round(win * 100)}% 贏過 SPY</li>
+        <li>平均每份榜單有 ${Math.round(avg('hit_rate') * 100)}% 的股票贏過 SPY</li></ul></div>`;
+    }).join('');
+    const recent = rows.filter((x) => x.horizon === 20).concat(rows.filter((x) => x.horizon === 5)).slice(0, 40);
+    const tr = recent.map((x) => `<tr><td>${esc(x.as_of)}</td><td>${x.horizon} 日</td><td>${pct1(Number(x.avg_ret))}</td><td>${pct1(Number(x.spy_ret))}</td><td class="${Number(x.excess) >= 0 ? 'up' : 'down'}">${pct1(Number(x.excess))}</td><td>${Math.round(Number(x.hit_rate) * 100)}%</td><td>${esc(x.best)} ${pct1(Number(x.best_ret))}<br><span class="muted">${esc(x.worst)} ${pct1(Number(x.worst_ret))}</span></td></tr>`).join('');
+    box.innerHTML = `<h3>歷史成績單</h3><p class="muted">每天主榜前 20 名在之後的表現。這是即時紀錄，不是回測：榜單當天就存下，之後不改。樣本少時請別當成結論。</p>
+      <div class="rc-grid">${cards}</div>
+      <div class="chart-wrap"><canvas id="rc-chart" height="160"></canvas></div>
+      <table class="mini"><thead><tr><th>榜單日</th><th>期間</th><th>平均報酬</th><th>SPY</th><th>超額</th><th>勝率</th><th>最佳 / 最差</th></tr></thead><tbody>${tr}</tbody></table>`;
+    const r20 = rows.filter((x) => x.horizon === 20).slice().reverse();
+    const use = r20.length >= 3 ? r20 : rows.filter((x) => x.horizon === 5).slice().reverse();
+    if (state.repChart) state.repChart.destroy();
+    state.repChart = new Chart($('#rc-chart'), {
+      type: 'bar',
+      data: { labels: use.map((x) => x.as_of.slice(5)), datasets: [{ label: `超額報酬（${use === r20 ? 20 : 5} 日）`, data: use.map((x) => Number(x.excess) * 100), backgroundColor: use.map((x) => (Number(x.excess) >= 0 ? 'rgba(52,168,120,.75)' : 'rgba(214,84,84,.75)')) }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { callback: (v) => v + '%' } } } },
+    });
   }
 
   const tableHeight = () => Math.max(420, window.innerHeight - 340);
@@ -366,7 +444,8 @@
       (!state.maxCap || (isNum(d.mkt_cap) && d.mkt_cap <= state.maxCap)) &&
       (!state.minStreak || (d.rev_streak ?? 0) >= state.minStreak) &&
       (!state.onlyNew || (isNum(d.rank_7d) === false && isNum(d.score_7d) === false)) &&
-      (!state.smartOnly || d.smart_score > 0));
+      (!state.smartOnly || d.smart_score > 0) &&
+      (!state.watchOnly || state.watch.has(d.ticker)));
     const total = state.rows.filter((r) => r.board === state.tab).length;
     $('#count').textContent = `顯示 ${state.stockTable.getDataCount('active')} 檔，共 ${total} 檔`;
   }
@@ -440,6 +519,8 @@
         { title: '市值', field: 'mkt_cap', width: 96, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4, formatter: (c) => usd(c.getValue()) },
         { title: '日成交額', field: 'dollar_vol', width: 106, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
           headerTooltip: '20 日平均成交金額', formatter: (c) => usd(c.getValue()) },
+        { title: '自選', field: 'ticker', width: 64, headerSort: false, hozAlign: 'center',
+          formatter: (c) => (state.watch.has(c.getValue()) ? '<span class="star on" title="已加入自選">★</span>' : '<span class="star">☆</span>') },
         { title: '大戶', field: 'smart_score', width: 150, sorter: 'number', responsive: 4,
           headerTooltip: '內部人買進（Form 4）與新增 5% 持有人（13D/13G），資料來自 SEC，分數 0 到 100',
           formatter: (c) => smartChips(c.getData()) },
@@ -565,10 +646,12 @@
         <span class="big">${nf(d.score, 1)}</span>
         <span class="meta">${boardName}第 ${nf(d.rank)} 名${diff !== null ? `，比約 7 天前${diff >= 0 ? '高' : '低'} ${Math.abs(diff).toFixed(1)}` : ''}</span>
       </div>
+      <div class="d-section radar-wrap"><canvas id="radar" height="220" aria-label="四個面向雷達圖"></canvas><p class="chart-note">藍色是這檔，灰色是主榜的中位數。冷門度是擁擠的反面。</p></div>
       ${pillar(0, '成長', d.growth, `營收年增 ${spct(d.rev_yoy)}，6 個月相對強度 ${spct(d.rs_6m)}（相對 SPY）。`, beats(d.growth))}
       ${pillar(1, '驗證', d.validated, `連續 ${nf(d.rev_streak)} 季營收季增，毛利率 ${pct(d.gross_margin)}。`, isNum(d.gross_margin) ? beats(d.validated) : '這檔沒有毛利率資料，這一項是以偏低的預設值估算，可信度較低。')}
       ${pillar(2, '進場', d.accessibility, `市值 ${usd(d.mkt_cap)}，20 日平均成交額 ${usd(d.dollar_vol)}，股價 $${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `Hacker News 近 30 天 ${isNum(d.hn_mentions) ? nf(d.hn_mentions) + ' 則' : '沒有資料'}，20 日平均成交額 ${usd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。目前沒有分析師與法人資料。` : '')}
+      <div class="d-section"><h3>我的筆記</h3><div id="watch-box"></div></div>
       <div class="d-section"><h3>大戶動向</h3><div id="smart-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>風險標記</h3>${f.length
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
@@ -589,8 +672,62 @@
         </dl>
       </div>`;
     showDrawer();
+    drawRadar(d);
+    renderWatch(d);
     loadSmart(d);
     loadStockCharts(d.ticker);
+  }
+
+  function renderWatch(d) {
+    const box = $('#watch-box');
+    const on = state.watch.has(d.ticker);
+    box.innerHTML = `<button type="button" class="btn-star" id="w-toggle" aria-pressed="${on}">${on ? '★ 已加入自選' : '☆ 加入自選'}</button>
+      <textarea id="w-note" class="field glass" rows="3" maxlength="1000" placeholder="記下你為什麼關注它（只有你看得到）"${on ? '' : ' hidden'}>${esc(state.watch.get(d.ticker) || '')}</textarea>
+      <p class="chart-note" id="w-msg"></p>`;
+    const msg = (t) => { const m = $('#w-msg'); if (m) m.textContent = t; };
+    const refresh = () => { if (state.stockReady) state.stockTable.redraw(true); };
+    const save = async (note) => {
+      const { error } = await state.sb.from('user_watch').upsert({ ticker: d.ticker, note, updated_at: new Date().toISOString() }, { onConflict: 'user_id,ticker' });
+      if (error) { msg(/user_watch|schema cache|does not exist/i.test(error.message) ? '自選功能的資料表還不存在，請先執行最新的 schema.sql。' : /row-level|null value|JWT/i.test(error.message) ? '請先登入才能使用自選與筆記。' : '儲存失敗：' + error.message); return false; }
+      return true;
+    };
+    $('#w-toggle').addEventListener('click', async () => {
+      if (state.watch.has(d.ticker)) {
+        const { error } = await state.sb.from('user_watch').delete().eq('ticker', d.ticker);
+        if (error) { msg('移除失敗：' + error.message); return; }
+        state.watch.delete(d.ticker);
+      } else {
+        if (!(await save(''))) return;
+        state.watch.set(d.ticker, '');
+      }
+      renderWatch(d); refresh(); if (state.watchOnly) applyFilters();
+    });
+    const ta = $('#w-note');
+    ta.addEventListener('blur', async () => {
+      if (!state.watch.has(d.ticker) || ta.value === state.watch.get(d.ticker)) return;
+      if (await save(ta.value)) { state.watch.set(d.ticker, ta.value); msg('已儲存'); }
+    });
+  }
+
+  function drawRadar(d) {
+    const cv = $('#radar');
+    if (!cv || typeof Chart === 'undefined') return;
+    const med = (k) => {
+      const v = state.rows.filter((r) => r.board === 'main' && isNum(r[k])).map((r) => r[k]).sort((a, b) => a - b);
+      return v.length ? v[Math.floor(v.length / 2)] : 0;
+    };
+    const cool = (x) => (isNum(x) ? 100 - x : 0);
+    state.charts.push(new Chart(cv, {
+      type: 'radar',
+      data: {
+        labels: ['成長', '驗證', '進場', '冷門度'],
+        datasets: [
+          { label: d.ticker, data: [d.growth, d.validated, d.accessibility, cool(d.attention)], borderColor: '#4766ea', backgroundColor: 'rgba(71,102,234,.25)' },
+          { label: '主榜中位數', data: [med('growth'), med('validated'), med('accessibility'), cool(med('attention'))], borderColor: '#9ca3af', backgroundColor: 'rgba(156,163,175,.12)', borderDash: [4, 4] },
+        ],
+      },
+      options: { scales: { r: { min: 0, max: 100, ticks: { display: false } } }, plugins: { legend: { position: 'bottom' } } },
+    }));
   }
 
   async function loadSmart(d) {
@@ -679,6 +816,37 @@
     }
   }
 
+  // Form C has no industry field, so the yardstick is the main board's median (listed small caps), not "same industry".
+  function compareBox(d, g, margin) {
+    const med = (arr) => { const v = arr.filter(isNum).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; };
+    const main = state.rows.filter((r) => r.board === 'main');
+    const mg = med(main.map((r) => r.rev_yoy));
+    if (!main.length || (g === null && margin === null)) return '';
+    return `<div class="compare"><b>和上市小型股比一比</b>
+      <p>營收成長：這家 ${g === null ? '—' : spct(g)}，主榜中位數 ${mg === null ? '—' : spct(mg)}。${g !== null && mg !== null ? (g > mg ? '高於' : '低於') + '主榜中位數。' : ''}</p>
+      <p class="chart-note">主榜是已評分的美國上市小型股。Form C 沒有產業欄位，所以這裡不是同產業比較，只當作成長速度的參考線。</p></div>`;
+  }
+
+  async function loadProgress(d) {
+    const box = $('#progress-box');
+    let u = [];
+    try {
+      const r = await state.sb.from('fundraise_updates').select('filed_at,form_type,raised').eq('cik', d.cik).order('filed_at', { ascending: false }).limit(3);
+      u = r.data || [];
+    } catch (e) { /* table not created yet */ }
+    if (state.current !== d.accession || !box) return;
+    const last = u.find((x) => isNum(Number(x.raised)) && x.raised !== null);
+    if (!last) {
+      box.innerHTML = '<p class="chart-note">還沒有看到這家公司的進度更新（Form C-U）。公司在募資過程中達到里程碑時才會申報，沒有申報不代表沒有進展。</p>';
+      return;
+    }
+    const goal = isNum(d.max_amount) && d.max_amount > 0 ? d.max_amount : d.target_amount;
+    const target = d.target_amount;
+    const p = isNum(goal) && goal > 0 ? Math.min(100, (Number(last.raised) / goal) * 100) : null;
+    box.innerHTML = `<p>已募得約 <b>${usd(Number(last.raised))}</b>（${esc(last.filed_at)} 的 ${esc(last.form_type)}）${isNum(target) && Number(last.raised) >= target ? '，已超過目標金額' : ''}。</p>
+      ${p === null ? '' : `<div class="meter g0"><i style="width:${p.toFixed(0)}%"></i></div><p class="chart-note">約達上限金額的 ${p.toFixed(0)}%。進度只到最近一次申報當天，之後可能已有變化。</p>`}`;
+  }
+
   function openRaise(d) {
     state.current = d.accession;
     const g = growthOf(d);
@@ -687,6 +855,7 @@
     const web = safeUrl(d.website);
     const filing = safeUrl(d.filing_url);
     const open = d.deadline && d.deadline >= todayStr();
+    const left = d.deadline ? Math.round((new Date(d.deadline) - new Date(todayStr())) / 86400000) : null;
 
     $('#drawer-body').innerHTML = `
       <div class="d-head">
@@ -699,8 +868,9 @@
       </div>
       <div class="d-score">
         <span class="chip ${open ? 'ok' : ''}">${open ? '募資中' : d.deadline ? '已截止' : '未載明截止日'}</span>
-        <span class="meta">${esc(d.form_type || 'C')} 申報於 ${esc(d.filed_at || '—')}${d.deadline ? '，截止 ' + esc(d.deadline) : ''}</span>
+        <span class="meta">${esc(d.form_type || 'C')} 申報於 ${esc(d.filed_at || '—')}${d.deadline ? '，截止 ' + esc(d.deadline) : ''}${left === null ? '' : open ? `，還剩 ${left} 天` : ''}</span>
       </div>
+      <div class="d-section"><h3>募資進度</h3><div id="progress-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>這一輪</h3>
         <dl class="facts">
           <div><dt>目標金額</dt><dd>${usd(d.target_amount)}</dd></div>
@@ -719,9 +889,11 @@
           <div><dt>員工數</dt><dd>${nf(d.employees)}</dd></div>
           <div><dt>以去年虧損粗估現金可撐</dt><dd>${months === null ? '—' : nf(months, 0) + ' 個月'}</dd></div>
         </dl>
+        ${compareBox(d, g, margin)}
         <p class="chart-note">這些數字由公司自行申報。財報的查核程度依募資金額而定：小額募資可由公司主管自行認證，金額較大才需要會計師核閱或查核。投資前請讀完整申報與募資平台頁面。</p>
       </div>`;
     showDrawer();
+    loadProgress(d);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

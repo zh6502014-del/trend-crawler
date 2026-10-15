@@ -10,12 +10,12 @@
 
   <!-- Libraries, all MIT-licensed, pinned to exact versions (no build step). -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
-  <link rel="stylesheet" href="style.css?v=20261016">
+  <link rel="stylesheet" href="style.css?v=20261017">
   <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
   <script defer src="config.js"></script>
-  <script defer src="app.js?v=20261016"></script>
+  <script defer src="app.js?v=20261017"></script>
 </head>
 <body>
   <header class="top glass">
@@ -47,6 +47,8 @@
           <button role="tab" data-tab="main" aria-selected="true">主榜</button>
           <button role="tab" data-tab="watch" aria-selected="false">觀察清單</button>
           <button role="tab" data-tab="raise" aria-selected="false">未上市募資</button>
+          <button role="tab" data-tab="heat" aria-selected="false">熱度圖</button>
+          <button role="tab" data-tab="report" aria-selected="false">成績單</button>
         </div>
 
         <div class="filters" id="filters-stock">
@@ -59,6 +61,7 @@
           </label>
           <label class="field glass check"><input id="f-risk" type="checkbox"> 隱藏高風險標記</label>
           <label class="field glass check"><input id="f-smart" type="checkbox"> 只看大戶進場</label>
+          <label class="field glass check"><input id="f-watch" type="checkbox"> 只看自選</label>
         </div>
 
         <div class="filters" id="filters-raise" hidden>
@@ -79,6 +82,14 @@
       <section class="board glass strong">
         <div id="tbl-stock"></div>
         <div id="tbl-raise" hidden></div>
+      </section>
+
+      <section id="heat" class="board glass strong report" hidden>
+        <div id="heat-body"></div>
+      </section>
+
+      <section id="report" class="board glass strong report" hidden>
+        <div id="report-body"><p class="muted">載入中…</p></div>
       </section>
 
       <section id="legend-stock" class="legend">

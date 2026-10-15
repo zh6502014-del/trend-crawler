@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Run one stage only: public or formc (blank = both)"
+        description: "Run one stage only: public, formc, smart, report or digest (blank = all)"
         required: false
         default: ""
       full_refresh:
@@ -44,6 +44,9 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
           ONLY: ${{ inputs.only }}
           FULL_REFRESH: ${{ inputs.full_refresh && '1' || '' }}
         run: python -m crawler.run

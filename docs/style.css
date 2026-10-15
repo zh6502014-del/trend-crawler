@@ -357,3 +357,30 @@ select.field option { color: #131a2f; background: #fff; }
 .mini { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
 .mini th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--hair); }
 .mini td { padding: 6px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+
+/* report card tab */
+.report { padding: 20px; }
+.report h3 { margin: 0 0 6px; }
+.rc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+.rc-card { border: 1px solid var(--hair); border-radius: 14px; padding: 14px 16px; }
+.rc-card h4 { margin: 0 0 6px; font-weight: 500; color: var(--muted); }
+.rc-card ul { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+.rc-big { font-size: 32px; font-weight: 600; }
+.chart-wrap { margin: 12px 0 20px; }
+
+.radar-wrap { max-width: 320px; margin: 0 auto 8px; }
+.heat-scroll { overflow-x: auto; }
+.heat { border-collapse: separate; border-spacing: 2px; font-size: 13px; width: 100%; }
+.heat th, .heat td { padding: 6px 8px; text-align: center; border-radius: 6px; font-weight: 400; }
+.heat th.l { text-align: left; white-space: nowrap; }
+.heat tbody tr { cursor: pointer; }
+.heat tbody tr:hover { outline: 1px solid var(--hair); }
+
+.star { font-size: 18px; color: var(--muted); }
+.star.on { color: var(--access); }
+.btn-star { font: inherit; padding: 8px 14px; border-radius: var(--r-ctl); border: 1px solid var(--hair); background: var(--glass); color: var(--ink); cursor: pointer; }
+.btn-star[aria-pressed="true"] { border-color: var(--access); color: var(--access); }
+#w-note { width: 100%; margin-top: 10px; box-sizing: border-box; font: inherit; resize: vertical; }
+
+.compare { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--hair); border-radius: 12px; }
+.compare p { margin: 6px 0 0; font-size: 13px; }

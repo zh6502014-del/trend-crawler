@@ -477,3 +477,60 @@ def test_run_smart_end_to_end(monkeypatch):
     assert "activist_13d" in row["tags"] and row["buyers_30d"] == 1
     stats2 = sm.run_smart(store, today=dt.date(2026, 10, 14))
     assert stats2["fetched"] == 0                    # already known: nothing downloaded twice
+
+
+def test_report_card_excess_vs_spy():
+    import datetime as dt
+    from crawler import report
+    d = [dt.date(2026, 10, 1) + dt.timedelta(days=i) for i in range(8)]
+    closes = {x: {"SPY": 100 + i, "A": 10 * (1 + 0.02 * i), "B": 10 * (1 - 0.01 * i), "C": 10.0} for i, x in enumerate(d)}
+    out = report.compute_report({d[0]: ["A", "B", "C"]}, closes, horizons=(5,))
+    assert len(out) == 1
+    r = out[0]
+    assert r["n"] == 3 and r["spy_ret"] == 0.05
+    assert abs(r["avg_ret"] - (0.1 - 0.05 + 0) / 3) < 1e-3
+    assert r["best"] == "A" and r["worst"] == "B" and r["hit_rate"] == round(1 / 3, 4)
+    assert report.compute_report({d[0]: ["A", "B", "C"]}, closes, horizons=(9,)) == []
+
+
+def test_run_report_end_to_end():
+    import datetime as dt
+    from crawler import report
+    from crawler.store import MemoryStore
+    st = MemoryStore()
+    base = dt.date(2026, 9, 1)
+    days = [base + dt.timedelta(days=i) for i in range(30)]
+    st.upsert("scores", [{"ticker": t, "as_of": base.isoformat(), "board": "main", "rank": i + 1} for i, t in enumerate("ABC")], "ticker,as_of")
+    st.upsert("price_days", [{"day": x.isoformat(), "bars": {"SPY": [100, 1], "A": [10 + i, 1], "B": [10, 1], "C": [10, 1]}} for i, x in enumerate(days)], "day")
+    stats = report.run_report(st, today=dt.date(2026, 10, 1))
+    assert stats["rows"] == 2
+    rows = st.select("report_card")
+    assert {r["horizon"] for r in rows} == {5, 20}
+
+
+def test_form_cu_parse_and_index():
+    from crawler import formc
+    xml = b"<edgarSubmission><x><currentAmountRaised>45,000</currentAmountRaised><deadlineDate>12-31-2026</deadlineDate></x></edgarSubmission>"
+    p = formc.parse_form_cu(xml)
+    assert p["raised"] == 45000.0 and "deadlineDate" not in p["raw"]
+    text = "x\n-----\n123|ACME INC|C-U|20261012|edgar/data/123/0001234567-26-000001.txt\n123|ACME INC|C|20261012|edgar/data/123/0001234567-26-000002.txt\n"
+    assert [r["form_type"] for r in formc.parse_master_idx(text)] == ["C"]
+    assert [r["form_type"] for r in formc.parse_master_idx(text, include_updates=True)] == ["C-U", "C"]
+
+
+def test_digest_compose_and_skip():
+    from crawler import digest
+    prev = [{"ticker": t, "board": "main", "rank": i + 1, "score": 60 - i} for i, t in enumerate(["A", "B", "C"])]
+    cur = [{"ticker": "D", "board": "main", "rank": 1, "score": 70}, {"ticker": "A", "board": "main", "rank": 2, "score": 61},
+           {"ticker": "B", "board": "main", "rank": 3, "score": 59}, {"ticker": "C", "board": "main", "rank": 25, "score": 40}]
+    smart = {"D": {"score": 80, "tags": ["insider_cluster"]}}
+    msg = digest.compose(cur, prev, smart, [{"issuer": "Acme"}], "2026-10-14")
+    assert "新進前 20 名：D" in msg and "內部人群買" in msg and "Acme" in msg
+    assert digest.compose(prev, prev, {}, [], "2026-10-14") is None
+
+
+def test_run_digest_skips_without_secrets(monkeypatch):
+    from crawler import digest
+    from crawler.store import MemoryStore
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    assert digest.run_digest(MemoryStore())["sent"] is False

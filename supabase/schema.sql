@@ -215,3 +215,27 @@ drop policy if exists read_authenticated on public.smart_money;
 create policy read_authenticated on public.smart_money for select to authenticated using (true);
 grant select on public.insider_trades, public.holder_filings, public.smart_money to authenticated;
 grant all on public.insider_trades, public.holder_filings, public.smart_seen, public.smart_money to service_role;
+
+-- ── Report card (how past top-20 lists did vs SPY) ──
+create table if not exists public.report_card (as_of date not null, horizon int not null, n int, avg_ret numeric, spy_ret numeric, excess numeric, hit_rate numeric, best text, best_ret numeric, worst text, worst_ret numeric, exit_day date, primary key (as_of, horizon));
+alter table public.report_card enable row level security;
+drop policy if exists read_authenticated on public.report_card;
+create policy read_authenticated on public.report_card for select to authenticated using (true);
+grant select on public.report_card to authenticated;
+grant all on public.report_card to service_role;
+
+-- ── Personal watchlist + notes (each signed-in user sees only their own rows) ──
+create table if not exists public.user_watch (user_id uuid not null default auth.uid(), ticker text not null, note text default '', updated_at timestamptz default now(), primary key (user_id, ticker));
+alter table public.user_watch enable row level security;
+drop policy if exists own_rows on public.user_watch;
+create policy own_rows on public.user_watch for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+grant select, insert, update, delete on public.user_watch to authenticated;
+
+-- ── Reg CF progress updates (Form C-U) ──
+create table if not exists public.fundraise_updates (accession text primary key, cik text not null, form_type text, filed_at date, raised numeric, raw jsonb);
+create index if not exists fundraise_updates_cik on public.fundraise_updates (cik, filed_at desc);
+alter table public.fundraise_updates enable row level security;
+drop policy if exists read_authenticated on public.fundraise_updates;
+create policy read_authenticated on public.fundraise_updates for select to authenticated using (true);
+grant select on public.fundraise_updates to authenticated;
+grant all on public.fundraise_updates to service_role;

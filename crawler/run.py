@@ -14,7 +14,7 @@ import traceback
 import numpy as np
 import pandas as pd
 
-from . import attention, formc, fundamentals, prices, score, smartmoney, universe
+from . import attention, formc, fundamentals, digest, prices, report, score, smartmoney, universe
 from . import config as cfg
 from .store import MemoryStore, Supabase, utcnow
 
@@ -132,7 +132,7 @@ def run_public(store) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", choices=["public", "formc", "smart"], default=os.getenv("ONLY") or None)
+    ap.add_argument("--only", choices=["public", "formc", "smart", "report", "digest"], default=os.getenv("ONLY") or None)
     ap.add_argument("--dry-run", action="store_true", help="run everything against an in-memory store")
     args = ap.parse_args(argv)
 
@@ -142,7 +142,7 @@ def main(argv=None) -> int:
     errors: dict = {}
     as_of = None
 
-    stages = [("public", run_public), ("formc", formc.run_formc), ("smart", smartmoney.run_smart)]
+    stages = [("public", run_public), ("formc", formc.run_formc), ("smart", smartmoney.run_smart), ("report", report.run_report), ("digest", digest.run_digest)]
     for name, fn in stages:
         if args.only and args.only != name:
             continue
