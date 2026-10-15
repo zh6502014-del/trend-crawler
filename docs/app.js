@@ -521,6 +521,7 @@
           headerTooltip: '20 日平均成交金額', formatter: (c) => usd(c.getValue()) },
         { title: '自選', field: 'ticker', width: 64, headerSort: false, hozAlign: 'center',
           formatter: (c) => (state.watch.has(c.getValue()) ? '<span class="star on" title="已加入自選">★</span>' : '<span class="star">☆</span>') },
+        { title: '產業', field: 'sector', width: 130, responsive: 5, formatter: (c) => esc(c.getValue() || '—') },
         { title: '大戶', field: 'smart_score', width: 150, sorter: 'number', responsive: 4,
           headerTooltip: '內部人買進（Form 4）與新增 5% 持有人（13D/13G），資料來自 SEC，分數 0 到 100',
           formatter: (c) => smartChips(c.getData()) },

@@ -534,3 +534,16 @@ def test_run_digest_skips_without_secrets(monkeypatch):
     from crawler.store import MemoryStore
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     assert digest.run_digest(MemoryStore())["sent"] is False
+
+
+def test_industry_sector_and_fill():
+    from crawler import industry
+    from crawler.store import MemoryStore
+    assert industry.sector_of(2834) == "生技與製藥" and industry.sector_of("7372") == "軟體與資訊服務"
+    assert industry.sector_of(3674) == "半導體與電子" and industry.sector_of(None) is None
+    p = industry.parse_submissions({"sic": "2834", "sicDescription": "Pharmaceutical Preparations"})
+    assert p["sector"] == "生技與製藥" and p["industry"] == "Pharmaceutical Preparations"
+    st = MemoryStore()
+    st.upsert("entities", [{"ticker": "AAA", "sector": "能源", "industry": "Crude Petroleum"}], "ticker")
+    out = industry.fill(st, ["AAA"], {"AAA": 1}, budget=0)
+    assert out["AAA"]["sector"] == "能源"

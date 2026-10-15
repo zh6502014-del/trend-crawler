@@ -14,7 +14,7 @@ import traceback
 import numpy as np
 import pandas as pd
 
-from . import attention, formc, fundamentals, digest, prices, report, score, smartmoney, universe
+from . import attention, formc, fundamentals, digest, industry, prices, report, score, smartmoney, universe
 from . import config as cfg
 from .store import MemoryStore, Supabase, utcnow
 
@@ -98,8 +98,14 @@ def run_public(store) -> dict:
     # ── write ──
     now = utcnow().isoformat()
     ex = dict(zip(uni["ticker"], uni["exchange"])) if "exchange" in uni else {}
+    ind = {}
+    try:
+        ind = industry.fill(store, list(scored.index), ciks)
+    except Exception as e:  # noqa: BLE001 - labels are optional
+        print(f"  industry skipped: {e!r}")
     store.upsert("entities", [
-        {"ticker": t, "name": names.get(t), "sector": r.get("sector"), "industry": r.get("industry"),
+        {"ticker": t, "name": names.get(t), "sector": ind.get(t, {}).get("sector") or r.get("sector"),
+         "industry": ind.get(t, {}).get("industry") or r.get("industry"),
          "exchange": ex.get(t), "updated_at": now}
         for t, r in scored.iterrows()
     ], "ticker")
