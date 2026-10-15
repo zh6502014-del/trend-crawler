@@ -333,3 +333,13 @@ select.field option { color: #131a2f; background: #fff; }
 @media (prefers-reduced-motion: reduce) {
   .drawer, .scrim { transition: none; }
 }
+
+/* quick views + data-quality note */
+.views { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; width: 100%; }
+.views .vbtn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hair); background: var(--glass); color: var(--ink); cursor: pointer; }
+.views .vbtn[aria-pressed="true"] { background: var(--valid); color: #fff; border-color: transparent; }
+.views .vdel { margin-left: -4px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+.views input { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--hair); background: var(--glass); color: var(--ink); width: 130px; }
+.views .vnote { font-size: 12px; color: var(--muted); }
+.quality { font-size: 12.5px; margin: 0 0 10px; line-height: 1.5; }
+.why { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
