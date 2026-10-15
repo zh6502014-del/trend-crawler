@@ -49,10 +49,20 @@ def send_telegram(text: str, token: str, chat_id: str) -> None:
     r.raise_for_status()
 
 
+def send_line(text: str, token: str, user_id: str) -> None:
+    """LINE Messaging API push to one user (LINE Notify was shut down in 2025)."""
+    r = requests.post("https://api.line.me/v2/bot/message/push",
+                      headers={"Authorization": f"Bearer {token}"},
+                      json={"to": user_id, "messages": [{"type": "text", "text": text[:4900]}]}, timeout=30)
+    r.raise_for_status()
+
+
 def run_digest(store, today: dt.date | None = None) -> dict:
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat:
-        print("  digest: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set, skipped")
+    line_token, line_user = os.getenv("LINE_CHANNEL_TOKEN"), os.getenv("LINE_USER_ID")
+    use_tg, use_line = bool(token and chat), bool(line_token and line_user)
+    if not use_tg and not use_line:
+        print("  digest: no TELEGRAM_* or LINE_* secrets set, skipped")
         return {"sent": False, "reason": "not configured"}
     today = today or dt.date.today()
     dates = sorted({r["as_of"] for r in store.select("scores", {"select": "as_of", "as_of": f"gte.{(today - dt.timedelta(days=14)).isoformat()}", "rank": "eq.1", "board": "eq.main"})}, reverse=True)
@@ -68,6 +78,15 @@ def run_digest(store, today: dt.date | None = None) -> dict:
     if not text:
         print("  digest: nothing new")
         return {"sent": False, "reason": "nothing new"}
-    send_telegram(text, token, chat)
-    print("  digest: sent")
-    return {"sent": True}
+    sent = []
+    for name, ok, fn in (("telegram", use_tg, lambda: send_telegram(text, token, chat)),
+                         ("line", use_line, lambda: send_line(text, line_token, line_user))):
+        if not ok:
+            continue
+        try:
+            fn()
+            sent.append(name)
+        except Exception as e:  # noqa: BLE001 - a failed notification must not fail the crawl
+            print(f"  digest: {name} failed: {str(e)[:150]}")
+    print(f"  digest: sent via {sent or 'nobody'}")
+    return {"sent": bool(sent), "channels": sent}

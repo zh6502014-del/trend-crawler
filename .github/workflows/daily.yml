@@ -46,6 +46,8 @@ jobs:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
           ONLY: ${{ inputs.only }}
           FULL_REFRESH: ${{ inputs.full_refresh && '1' || '' }}

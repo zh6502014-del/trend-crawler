@@ -532,7 +532,8 @@ def test_digest_compose_and_skip():
 def test_run_digest_skips_without_secrets(monkeypatch):
     from crawler import digest
     from crawler.store import MemoryStore
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    for k in ("TELEGRAM_BOT_TOKEN", "LINE_CHANNEL_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
     assert digest.run_digest(MemoryStore())["sent"] is False
 
 
