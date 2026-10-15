@@ -584,3 +584,15 @@ def test_line_budget_fails_closed_and_respects_ceiling():
     assert digest.line_budget_ok("t", sess({"type": "none"}, {"totalUsage": 0}))[0] is False                       # unlimited/paid plan
     assert digest.line_budget_ok("t", sess({"type": "limited", "value": 200}, {"totalUsage": 1}, bad=True))[0] is False
     assert digest.line_budget_ok("t", sess({"type": "limited", "value": 200}, {}))[0] is False                    # missing usage
+
+
+def test_main_board_is_capped_to_best_scores(monkeypatch):
+    monkeypatch.setattr(cfg, "MAIN_MAX_NAMES", 3)
+    out = score.compute_scores(make_universe())
+    main = out[out["board"] == "main"]
+    assert len(main) <= 3
+    rest = out[(out["board"] == "watch")]
+    if len(main) == 3 and not rest.empty:
+        eligible = rest[~rest["flags"].map(lambda f: "data_thin" in f) & rest["mkt_cap"].between(cfg.MAIN_CAP_MIN, cfg.MAIN_CAP_MAX)
+                        & (rest["dollar_vol"] >= cfg.MIN_DOLLAR_VOL) & (rest["price"] >= cfg.MIN_PRICE)]
+        assert (eligible["score"] <= main["score"].min()).all()

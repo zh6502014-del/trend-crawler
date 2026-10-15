@@ -116,6 +116,8 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
         & (d["price"] >= cfg.MIN_PRICE)
         & ~d["flags"].map(lambda f: "data_thin" in f)
     )
+    if cfg.MAIN_MAX_NAMES and main.sum() > cfg.MAIN_MAX_NAMES:  # keep only the best-scoring gate-passers
+        main = main & (d["score"].where(main).rank(ascending=False, method="first") <= cfg.MAIN_MAX_NAMES)
     d["board"] = np.where(main, "main", "watch")
     d["rank"] = d.groupby("board")["score"].rank(ascending=False, method="first").astype(int)
     return d

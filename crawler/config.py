@@ -20,6 +20,7 @@ SCORE_CAP_MAX = 20e9
 MAIN_CAP_MIN = 50e6
 MAIN_CAP_MAX = 10e9
 CAP_SWEET_MAX = 2e9           # full "accessibility" marks up to here, decaying to 0 at MAIN_CAP_MAX
+MAIN_MAX_NAMES = int(os.getenv("MAIN_MAX_NAMES", "150"))  # main board keeps only the best-scoring names that pass the gates
 MIN_DOLLAR_VOL = 300_000      # liquidity gate for the main board (and the 0-point of the liquidity score)
 
 # ── Fetch budget ────────────────────────────────────────────────────────────
