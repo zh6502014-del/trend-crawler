@@ -222,7 +222,8 @@ select.field option { color: #131a2f; background: #fff; }
 .tabulator { background: transparent !important; border: 0 !important; font-size: 14px; color: var(--ink); }
 .tabulator .tabulator-header { background: transparent !important; border-bottom: 1px solid var(--hair) !important; color: var(--muted); font-weight: 500; }
 .tabulator .tabulator-header .tabulator-col { background: transparent !important; border-right: 0 !important; }
-.tabulator .tabulator-header .tabulator-col .tabulator-col-content { padding: 14px 12px; }
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content { padding: 14px 8px; }
+.tabulator .tabulator-header .tabulator-col .tabulator-col-title { white-space: nowrap; text-overflow: clip; padding-right: 14px; }
 .tabulator .tabulator-header .tabulator-col.tabulator-sortable:hover { background: color-mix(in srgb, var(--ink) 5%, transparent) !important; }
 .tabulator .tabulator-header .tabulator-col .tabulator-col-sorter .tabulator-arrow { border-bottom-color: var(--muted); border-top-color: var(--muted); }
 .tabulator .tabulator-tableholder { background: transparent; }

@@ -30,9 +30,16 @@ _GROUPS = [
     (1000, 1299, "礦業與金屬"), (1400, 1499, "礦業與金屬"),
     (1500, 1799, "營建"),
     (100, 999, "農林漁"),
-    (2000, 3999, "製造業"),
-    (7000, 8999, "服務業"),
+    (2000, 2099, "食品與飲料"), (2100, 2199, "菸酒"), (2200, 2399, "紡織與服飾"), (2400, 2599, "木材與家具"),
+    (2600, 2799, "紙與印刷"), (2800, 2899, "化學品"), (3000, 3299, "橡膠塑膠與非金屬"), (3300, 3499, "金屬製品"),
+    (3500, 3599, "工業機械"),
+    (2000, 3999, "其他製造"),
+    (7000, 7099, "旅宿"), (7200, 7299, "個人服務"), (7300, 7369, "商業服務"), (7380, 7399, "商業服務"),
+    (7500, 7599, "汽車服務"), (7800, 7999, "娛樂與休閒"), (8200, 8299, "教育"), (8700, 8799, "專業與研究服務"),
+    (7000, 8999, "其他服務"),
 ]
+# labels produced by an older version of the table above; rows carrying them are looked up again once
+LEGACY_SECTORS = {"服務業", "製造業"}
 
 
 def sector_of(sic) -> str | None:
@@ -57,7 +64,8 @@ def fill(store, tickers, ciks: dict, budget: int = BUDGET) -> dict:
     known = {r["ticker"]: r for r in store.select("entities", {"select": "ticker,sector,industry"})
              if r.get("sector") or r.get("industry")}
     out = {t: {"sector": known[t].get("sector"), "industry": known[t].get("industry")} for t in tickers if t in known}
-    todo = [t for t in tickers if t not in out and ciks.get(t) is not None]
+    stale = {t for t, v in out.items() if v["sector"] in LEGACY_SECTORS}  # keep the old label if the lookup fails
+    todo = [t for t in tickers if (t not in out or t in stale) and ciks.get(t) is not None]
     fetched = failed = 0
     s = requests.Session()
     if todo and budget > 0:

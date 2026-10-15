@@ -418,7 +418,7 @@
     });
   }
 
-  const tableHeight = () => Math.max(420, window.innerHeight - 340);
+  const tableHeight = () => Math.max(480, window.innerHeight - 290);
 
   function applyFilters() {
     if (state.tab === 'raise') {
@@ -499,7 +499,7 @@
         el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openStock(row.getData()); } };
       },
       columns: [
-        { title: '#', field: 'rank', width: 56, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 0 },
+        { title: '#', field: 'rank', width: 72, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 0 },
         { title: '股票', field: 'ticker', minWidth: 170, widthGrow: 3, sorter: 'string', responsive: 0,
           formatter: (c) => { const d = c.getData(); return `<div class="cell-name"><b>${esc(d.ticker)}</b><span>${esc(d.name || '')}</span></div>`; } },
         { title: '分數', field: 'score', width: 124, sorter: 'number', responsive: 0,
@@ -511,17 +511,17 @@
             return `<div class="cell-score"><b>${nf(d.score, 1)}</b>${delta}</div>`;
           } },
         { title: '結構', field: 'growth', width: 80, headerSort: false, responsive: 1, formatter: (c) => glyph(c.getData()) },
-        { title: '營收年增', field: 'rev_yoy', width: 104, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 2,
+        { title: '營收年增', field: 'rev_yoy', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 2,
           formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue())}</span>` },
-        { title: '6 個月強度', field: 'rs_6m', width: 118, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 3,
+        { title: '6 個月強度', field: 'rs_6m', width: 136, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 3,
           headerTooltip: '6 個月報酬減去 SPY 的 6 個月報酬',
           formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue())}</span>` },
-        { title: '市值', field: 'mkt_cap', width: 96, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4, formatter: (c) => usd(c.getValue()) },
-        { title: '日成交額', field: 'dollar_vol', width: 106, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
+        { title: '市值', field: 'mkt_cap', width: 104, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4, formatter: (c) => usd(c.getValue()) },
+        { title: '日成交額', field: 'dollar_vol', width: 116, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
           headerTooltip: '20 日平均成交金額', formatter: (c) => usd(c.getValue()) },
         { title: '自選', field: 'ticker', width: 64, headerSort: false, hozAlign: 'center',
           formatter: (c) => (state.watch.has(c.getValue()) ? '<span class="star on" title="已加入自選">★</span>' : '<span class="star">☆</span>') },
-        { title: '產業', field: 'sector', width: 130, responsive: 5, formatter: (c) => esc(c.getValue() || '—') },
+        { title: '產業', field: 'sector', width: 140, responsive: 5, formatter: (c) => esc(c.getValue() || '—') },
         { title: '大戶', field: 'smart_score', width: 150, sorter: 'number', responsive: 4,
           headerTooltip: '內部人買進（Form 4）與新增 5% 持有人（13D/13G），資料來自 SEC，分數 0 到 100',
           formatter: (c) => smartChips(c.getData()) },

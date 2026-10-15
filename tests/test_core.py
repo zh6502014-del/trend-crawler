@@ -542,6 +542,7 @@ def test_industry_sector_and_fill():
     from crawler.store import MemoryStore
     assert industry.sector_of(2834) == "生技與製藥" and industry.sector_of("7372") == "軟體與資訊服務"
     assert industry.sector_of(3674) == "半導體與電子" and industry.sector_of(None) is None
+    assert industry.sector_of(7389) == "商業服務" and industry.sector_of(2000) == "食品與飲料" and industry.sector_of(3590) == "工業機械"
     p = industry.parse_submissions({"sic": "2834", "sicDescription": "Pharmaceutical Preparations"})
     assert p["sector"] == "生技與製藥" and p["industry"] == "Pharmaceutical Preparations"
     st = MemoryStore()
