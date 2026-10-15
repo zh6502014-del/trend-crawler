@@ -352,3 +352,8 @@ select.field option { color: #131a2f; background: #fff; }
 .tabulator .tabulator-row .tabulator-col-resize-handle { display: none; }
 
 .tabulator .tabulator-row .tabulator-cell { gap: 6px; }
+
+/* drawer mini tables (insider trades, 13D/13G holders) */
+.mini { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+.mini th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--hair); }
+.mini td { padding: 6px; border-bottom: 1px solid var(--hair); vertical-align: top; }

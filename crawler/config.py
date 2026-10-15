@@ -61,6 +61,10 @@ HN_PAUSE = 0.12
 FORMC_DAYS_BACK = int(os.getenv("FORMC_DAYS_BACK", "21"))
 SEC_PAUSE = 0.15               # SEC allows 10 req/s; stay well below
 
+# ── Big-money signals (Form 4 + Schedule 13D/G) ─────────────────────────────
+SMART_DAYS_BACK = int(os.getenv("SMART_DAYS_BACK", "30"))
+MAX_SMART_FETCH_PER_RUN = int(os.getenv("MAX_SMART_FETCH_PER_RUN", "3000"))
+
 
 def sec_headers() -> dict:
     """SEC rejects anonymous clients. Set SEC_USER_AGENT to 'Your Name you@example.com'."""

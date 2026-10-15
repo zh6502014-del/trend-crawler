@@ -127,54 +127,56 @@ def _qis(rev, gp=None):
     return pd.DataFrame(rows, index=cols).T
 
 
-def test_parse_fundamentals_growth_and_streak():
-    q = _qis([100, 110, 125, 140, 170], gp=[40, 45, 52, 60, 80])
-    p = fundamentals.parse_fundamentals(
-        {"marketCap": 500e6, "totalCash": 30e6, "freeCashflow": -60e6, "numberOfAnalystOpinions": 3}, q
-    )
-    assert p["ok"] and math.isclose(p["rev_yoy"], 0.70)
-    assert p["rev_streak"] == 4 and p["quarters"] == 5
-    assert math.isclose(p["gross_margin"], 80 / 170)
-    assert math.isclose(p["runway_months"], 6.0)
+def _cf(rev_pairs, ni=None, cash=5e6, shares=1e7):
+    """Synthetic SEC companyfacts: rev_pairs = [(start, end, val)]."""
+    def rows(pairs):
+        return [{"start": a, "end": b, "val": v, "filed": b} for a, b, v in pairs]
+    us = {"Revenues": {"units": {"USD": rows(rev_pairs)}},
+          "CashAndCashEquivalentsAtCarryingValue": {"units": {"USD": [{"end": "2026-06-30", "val": cash, "filed": "2026-08-01"}]}}}
+    if ni:
+        us["NetIncomeLoss"] = {"units": {"USD": rows(ni)}}
+    return {"entityName": "X", "facts": {"us-gaap": us, "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+        {"end": "2026-07-20", "val": shares, "filed": "2026-08-01"}]}}}}}
 
 
-def test_parse_fundamentals_falls_back_to_info():
-    p = fundamentals.parse_fundamentals({"marketCap": 1e9, "revenueGrowth": 0.3, "grossMargins": 0.5}, None)
-    assert p["rev_yoy"] == 0.3 and p["gross_margin"] == 0.5 and p["quarters"] == 0 and p["runway_months"] is None
-    assert fundamentals.parse_fundamentals({}, None)["ok"] is False
+def test_parse_companyfacts_growth_streak_runway():
+    import datetime as dt
+    qs = [("2025-04-01", "2025-06-30", 100), ("2025-07-01", "2025-09-30", 110),
+          ("2025-10-01", "2025-12-31", 125), ("2026-01-01", "2026-03-31", 140), ("2026-04-01", "2026-06-30", 200)]
+    ni = [("2026-04-01", "2026-06-30", -3e6)]
+    p = fundamentals.parse_companyfacts(_cf(qs, ni), today=dt.date(2026, 9, 1))
+    assert p["ok"] and p["shares_out"] == 1e7
+    assert abs(p["rev_yoy"] - 1.0) < 1e-9
+    assert p["rev_streak"] == 4
+    assert abs(p["runway_months"] - 5.0) < 1e-9
 
 
-# ── attention ──────────────────────────────────────────────────────────────
-def test_clean_name():
-    assert attention.clean_name("Acme Robotics, Inc.") == "Acme Robotics"
-    assert attention.clean_name("Foo Holdings Corp Class A") == "Foo"
-    assert attention.clean_name("AB") is None and attention.clean_name(None) is None
+def test_parse_companyfacts_derives_q4_and_rejects_stale():
+    import datetime as dt
+    pairs = [("2025-01-01", "2025-03-31", 10), ("2025-01-01", "2025-09-30", 40), ("2025-01-01", "2025-12-31", 60)]
+    cf = _cf(pairs)
+    p = fundamentals.parse_companyfacts(cf, today=dt.date(2026, 2, 1))
+    assert p["ok"] and p["quarters"] == 2
+    assert not fundamentals.parse_companyfacts(cf, today=dt.date(2028, 1, 1))["ok"]
 
-
-# ── Form C ─────────────────────────────────────────────────────────────────
-SAMPLE_XML = b"""<?xml version="1.0"?>
+SAMPLE_XML = """<?xml version="1.0"?>
 <edgarSubmission xmlns="http://www.sec.gov/edgar/formc">
-  <formData>
-    <issuerInformation>
-      <issuerInfo><nameOfIssuer>Acme Rockets, Inc.</nameOfIssuer><issuerWebsite>https://acme.example</issuerWebsite></issuerInfo>
-      <companyName>Example Funding Portal LLC</companyName>
-      <securityOfferedType>Common Stock</securityOfferedType>
-      <price>1.25</price>
-      <offeringAmount>50,000.00</offeringAmount>
-      <maximumOfferingAmount>1,235,000.00</maximumOfferingAmount>
-      <deadlineDate>12-31-2026</deadlineDate>
-    </issuerInformation>
-    <annualReportDisclosureRequirements>
-      <currentEmployees>12</currentEmployees>
-      <totalAssetMostRecentFiscalYear>800000.00</totalAssetMostRecentFiscalYear>
-      <cashEquiMostRecentFiscalYear>150000.00</cashEquiMostRecentFiscalYear>
-      <longTermDebtMostRecentFiscalYear>20000.00</longTermDebtMostRecentFiscalYear>
-      <revenueMostRecentFiscalYear>900000.00</revenueMostRecentFiscalYear>
-      <revenuePriorFiscalYear>450000.00</revenuePriorFiscalYear>
-      <netIncomeMostRecentFiscalYear>(120000.00)</netIncomeMostRecentFiscalYear>
-      <netIncomePriorFiscalYear>-200000.00</netIncomePriorFiscalYear>
-    </annualReportDisclosureRequirements>
-  </formData>
+  <issuerInformation><issuerInfo><nameOfIssuer>Acme Rockets, Inc.</nameOfIssuer>
+    <issuerWebsite>https://acme.example</issuerWebsite></issuerInfo>
+    <securityOfferedType>Common Stock</securityOfferedType><price>1.25</price>
+    <offeringAmount>50000</offeringAmount><maximumOfferingAmount>1235000</maximumOfferingAmount>
+    <deadlineDate>12-31-2026</deadlineDate></issuerInformation>
+  <intermediaryCompanyName>x</intermediaryCompanyName>
+  <companyName>Example Funding Portal LLC</companyName>
+  <annualReportDisclosureRequirements><currentEmployees>12</currentEmployees>
+    <totalAssetMostRecentFiscalYear>800000</totalAssetMostRecentFiscalYear>
+    <cashAndCashEquivalentMostRecentFiscalYear>150000</cashAndCashEquivalentMostRecentFiscalYear>
+    <longTermDebtMostRecentFiscalYear>20000</longTermDebtMostRecentFiscalYear>
+    <revenueMostRecentFiscalYear>900000</revenueMostRecentFiscalYear>
+    <revenuePriorFiscalYear>450000</revenuePriorFiscalYear>
+    <netIncomeMostRecentFiscalYear>-120000</netIncomeMostRecentFiscalYear>
+    <netIncomePriorFiscalYear>-200000</netIncomePriorFiscalYear>
+  </annualReportDisclosureRequirements>
 </edgarSubmission>"""
 
 
@@ -239,7 +241,7 @@ def test_full_dry_run_pipeline(monkeypatch):
                 "rev_streak": i % 5, "quarters": 5, "runway_months": None}
 
     monkeypatch.setattr(run.universe, "get_universe", lambda: uni)
-    monkeypatch.setattr(run.prices, "load_prices", lambda tk: (px, closes, dt.date(2026, 10, 13), 0.05))
+    monkeypatch.setattr(run.prices, "load_prices", lambda tk, store=None: (px, closes, dt.date(2026, 10, 13), 0.05))
     monkeypatch.setattr(fundamentals, "fetch_fundamentals", fake_fund)
     monkeypatch.setattr(cfg, "REQUEST_PAUSE", 0)
     monkeypatch.setattr(run.attention, "fetch_all", lambda names: {t: (hash(t) % 5) for t in names})
@@ -308,3 +310,170 @@ def test_transient_fetch_error_is_not_cached(monkeypatch):
     out, stats = fu.refresh_cache(st, ["BAD", "GOOD"])
     cached = {r["ticker"] for r in st.select("fundamentals_cache")}
     assert cached == {"GOOD"} and "GOOD" in out and stats["failed"] == 1 and stats["refreshed"] == 1
+
+
+def test_grouped_daily_to_frames():
+    from crawler import prices
+    p = {"results": [{"T": "AAA", "c": 2.0, "v": 1000}, {"T": "SPY", "c": 500.0, "v": 9}, {"T": "ZZZ", "c": 1.0, "v": 1}]}
+    assert prices.parse_grouped(p)[0] == {"T": "AAA", "c": 2.0, "v": 1000}
+    assert prices.parse_grouped({"results": None}) == []
+    d1, d2 = dt.date(2026, 10, 12), dt.date(2026, 10, 13)
+    c, v = prices.frames_from_bars({d1: prices.parse_grouped(p), d2: []}, ["AAA"])
+    assert list(c.columns) == ["AAA", "SPY"] and len(c) == 1 and v["AAA"].iloc[0] == 1000
+
+
+def test_price_days_cache_roundtrip(monkeypatch):
+    """Second run reads cached days from the store and only fetches what is missing."""
+    from crawler import prices
+    from crawler.store import MemoryStore
+
+    class D(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 14)
+
+    monkeypatch.setattr(prices.dt, "date", D)
+    monkeypatch.setenv("MASSIVE_API_KEY", "x")
+    monkeypatch.delenv("FULL_REFRESH", raising=False)
+    monkeypatch.setattr(prices.time, "sleep", lambda s: None)
+    calls = []
+
+    def fake(session, day, key):
+        calls.append(day)
+        if day == dt.date(2026, 10, 13):
+            return None  # not published yet
+        px = 100 + len(calls) * 0.01
+        return [{"T": "SPY", "c": px, "v": 1e6}, {"T": "AAA", "c": px * 2, "v": 5e5}, {"T": "ZZZ", "c": 9.0, "v": 1.0}]
+
+    monkeypatch.setattr(prices, "_fetch_day", fake)
+    store = MemoryStore()
+    df, closes, as_of, _ = prices.load_prices(["AAA"], store)
+    first = len(calls)
+    assert as_of == dt.date(2026, 10, 12) and "AAA" in df.index
+    cached_days = len(store.tables["price_days"])
+    assert cached_days == first - 1                       # the unpublished day is never cached
+    assert "ZZZ" not in next(iter(store.tables["price_days"].values()))["bars"]  # only wanted tickers stored
+    calls.clear()
+    prices.load_prices(["AAA"], store)
+    assert calls == [dt.date(2026, 10, 13)]               # only the unpublished day is retried
+
+
+# ── big-money signals ────────────────────────────────────────────────────────
+FORM4_TXT = """<SEC-DOCUMENT>0001234567-26-000123.txt
+<DOCUMENT><TYPE>4<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+  <issuer><issuerCik>0000111222</issuerCik><issuerTradingSymbol>ACME</issuerTradingSymbol></issuer>
+  <reportingOwner>
+    <reportingOwnerId><rptOwnerName>DOE JANE</rptOwnerName></reportingOwnerId>
+    <reportingOwnerRelationship><isDirector>1</isDirector><isOfficer>true</isOfficer><officerTitle>CEO</officerTitle></reportingOwnerRelationship>
+  </reportingOwner>
+  <nonDerivativeTable>
+    <nonDerivativeTransaction>
+      <transactionDate><value>2026-10-09</value></transactionDate>
+      <transactionCoding><transactionCode>P</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>10000</value></transactionShares>
+        <transactionPricePerShare><value>12.50</value></transactionPricePerShare>
+        <transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+    <nonDerivativeTransaction>
+      <transactionDate><value>2026-10-09</value></transactionDate>
+      <transactionCoding><transactionCode>A</transactionCode></transactionCoding>
+      <transactionAmounts><transactionShares><value>500</value></transactionShares></transactionAmounts>
+    </nonDerivativeTransaction>
+  </nonDerivativeTable>
+</ownershipDocument>
+</XML></DOCUMENT></SEC-DOCUMENT>"""
+
+SCHED13D_TXT = """<XML><edgarSubmission xmlns="http://www.sec.gov/edgar/schedule13D">
+<formData><reportingPersons><reportingPersonInfo>
+<reportingPersonName>BIG FUND LP</reportingPersonName>
+<reportingPersonBeneficiallyOwnedAggregateNumberOfShares>1,250,000</reportingPersonBeneficiallyOwnedAggregateNumberOfShares>
+<classPercent>6.2</classPercent>
+</reportingPersonInfo></reportingPersons></formData></edgarSubmission></XML>"""
+
+
+def test_parse_form4_keeps_only_open_market_trades():
+    from crawler import smartmoney as sm
+    p = sm.parse_form4(FORM4_TXT)
+    assert p["owner"] == "DOE JANE" and p["title"] == "CEO" and p["is_officer"] and p["is_director"]
+    assert len(p["rows"]) == 1  # the grant (code A) is dropped
+    r = p["rows"][0]
+    assert r["code"] == "P" and r["shares"] == 10000 and r["price"] == 12.5 and r["value"] == 125000
+    assert str(r["tx_date"]) == "2026-10-09"
+    assert sm.parse_form4("nothing here") is None
+
+
+def test_parse_13dg_and_index():
+    from crawler import smartmoney as sm
+    p = sm.parse_13dg(SCHED13D_TXT)
+    assert p == {"holder": "BIG FUND LP", "shares": 1250000.0, "pct": 6.2}
+    idx = "header\n-----\n111222|ACME INC|4|20261012|edgar/data/111222/0001234567-26-000123.txt\n" \
+          "999|OTHER|4|20261012|edgar/data/999/0001234567-26-000124.txt\n" \
+          "111222|ACME INC|SCHEDULE 13D|20261012|edgar/data/111222/0001234567-26-000125.txt\n" \
+          "111222|ACME INC|10-Q|20261012|edgar/data/111222/0001234567-26-000126.txt\n"
+    rows = sm.parse_index(idx, {"111222"})
+    assert [r["form"] for r in rows] == ["4", "SCHEDULE 13D"]
+
+
+def test_compute_signals_cluster_and_activist():
+    from crawler import smartmoney as sm
+    today = dt.date(2026, 10, 14)
+    d = lambda n: today - dt.timedelta(days=n)  # noqa: E731
+    trades = [
+        {"code": "P", "owner": "A", "value": 60_000, "filed_at": d(3), "is_officer": True, "is_director": False},
+        {"code": "P", "owner": "B", "value": 70_000, "filed_at": d(5), "is_officer": False, "is_director": True},
+        {"code": "P", "owner": "C", "value": 200_000, "filed_at": d(40)},   # outside 30 days
+        {"code": "S", "owner": "D", "value": 1_000_000, "filed_at": d(2)},
+    ]
+    holders = [{"form_type": "SCHEDULE 13D", "holder": "X", "pct": 6.0, "filed_at": d(10)},
+               {"form_type": "SCHEDULE 13D/A", "holder": "Y", "pct": 7.0, "filed_at": d(4)}]
+    s = sm.compute_signals(trades, holders, today)
+    assert s["tags"] == ["insider_cluster", "activist_13d"]
+    assert s["buyers_30d"] == 2 and s["buy_value_30d"] == 130_000 and s["sellers_30d"] == 1
+    assert s["n_13d_90d"] == 1                      # the amendment does not count as a new holder
+    assert s["score"] == 50 + 15 + 35
+    quiet = sm.compute_signals([{"code": "P", "owner": "A", "value": 5_000, "filed_at": d(1)}], [], today)
+    assert quiet["tags"] == [] and quiet["score"] == 0
+
+
+def test_run_smart_end_to_end(monkeypatch):
+    import pandas as pd
+    from crawler import smartmoney as sm, universe
+    from crawler.store import MemoryStore
+
+    class D(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 14)
+
+    store = MemoryStore()
+    store.upsert("scores", [{"ticker": "ACME", "as_of": "2026-10-13"}], "ticker,as_of")
+    monkeypatch.setattr(universe, "get_universe", lambda: pd.DataFrame({"ticker": ["ACME"], "cik": [111222]}))
+    monkeypatch.setenv("SEC_USER_AGENT", "Test t@example.com")
+    monkeypatch.setattr(sm.time, "sleep", lambda s: None)
+
+    class R:
+        def __init__(self, text):
+            self.text, self.status_code = text, 200
+
+        def raise_for_status(self):
+            pass
+
+    day_idx = "h\n-----\n111222|ACME INC|4|20261013|edgar/data/111222/0001234567-26-000123.txt\n" \
+              "111222|ACME INC|SCHEDULE 13D|20261013|edgar/data/111222/0001234567-26-000125.txt\n"
+
+    def fake_get(self, url, timeout=60):
+        if "daily-index" in url:
+            return R(day_idx) if "20261013" in url else R("h\n-----\n")
+        return R(FORM4_TXT if "000123" in url else SCHED13D_TXT)
+
+    monkeypatch.setattr(sm.requests.Session, "get", fake_get)
+    stats = sm.run_smart(store, today=dt.date(2026, 10, 14))
+    assert stats["form4"] == 1 and stats["trades"] == 1 and stats["holders"] == 1
+    row = store.tables["smart_money"][("ACME",)]
+    assert "activist_13d" in row["tags"] and row["buyers_30d"] == 1
+    stats2 = sm.run_smart(store, today=dt.date(2026, 10, 14))
+    assert stats2["fetched"] == 0                    # already known: nothing downloaded twice

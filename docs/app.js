@@ -55,7 +55,7 @@
   const state = {
     sb: null, started: false, rows: [], raises: [], run: null,
     tab: 'main', q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
-    maxCap: 0, minStreak: 0, onlyNew: false, portal: '', soon: false, view: 'all', saved: [],
+    maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, portal: '', soon: false, view: 'all', saved: [],
     stockTable: null, raiseTable: null, stockReady: false, raiseReady: false,
     charts: [], current: null, lastFocus: null,
   };
@@ -146,6 +146,11 @@
         sb.from('crawl_runs').select('status,started_at,finished_at,as_of,errors').order('started_at', { ascending: false }).limit(1),
       ]);
       state.rows = rows;
+      try {
+        const sm = await pageAll((a, b) => sb.from('smart_money').select('*').gt('score', 0).range(a, b));
+        const by = new Map(sm.map((x) => [x.ticker, x]));
+        rows.forEach((r) => { r.smart = by.get(r.ticker) || null; r.smart_score = r.smart ? r.smart.score : 0; });
+      } catch (e) { rows.forEach((r) => { r.smart = null; r.smart_score = 0; }); }
       state.raises = raises;
       state.run = runRes.data?.[0] || null;
     } catch (e) {
@@ -213,12 +218,13 @@
   }
 
   // ── quick views (built-in + saved in this browser) ──────────────────────
-  const BASE = { q: '', sector: '', minScore: 0, hideRisk: false, maxCap: 0, minStreak: 0, onlyNew: false };
+  const BASE = { q: '', sector: '', minScore: 0, hideRisk: false, maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false };
   const PRESETS = [
     { id: 'all', label: '全部', f: {} },
     { id: 'streak', label: '連續 3 季以上成長', f: { minStreak: 3 } },
     { id: 'small', label: '小型且低風險', f: { maxCap: 5e8, hideRisk: true } },
     { id: 'new', label: '近 7 天新進榜', f: { onlyNew: true } },
+    { id: 'smart', label: '大戶進場', f: { smartOnly: true } },
   ];
 
   function applyView(id, f) {
@@ -229,6 +235,7 @@
     $('#f-min').value = state.minScore;
     $('#f-min-out').textContent = state.minScore;
     $('#f-risk').checked = state.hideRisk;
+    $('#f-smart').checked = state.smartOnly;
     renderViews();
     applyFilters();
   }
@@ -268,7 +275,7 @@
         const name = $('#view-name').value.trim();
         if (!name) { $('#view-name').focus(); return; }
         const list = store.get('tc_views') || [];
-        list.push({ label: name, f: { q: state.q, sector: state.sector, minScore: state.minScore, hideRisk: state.hideRisk, maxCap: state.maxCap, minStreak: state.minStreak, onlyNew: state.onlyNew } });
+        list.push({ label: name, f: { q: state.q, sector: state.sector, minScore: state.minScore, hideRisk: state.hideRisk, maxCap: state.maxCap, minStreak: state.minStreak, onlyNew: state.onlyNew, smartOnly: state.smartOnly } });
         store.set('tc_views', list.slice(-8));
         state.view = 's' + (Math.min(list.length, 8) - 1);
         renderViews();
@@ -301,6 +308,7 @@
     $('#f-sector').addEventListener('change', (e) => { state.sector = e.target.value; applyFilters(); });
     $('#f-min').addEventListener('input', (e) => { state.minScore = +e.target.value; $('#f-min-out').textContent = e.target.value; applyFilters(); });
     $('#f-risk').addEventListener('change', (e) => { state.hideRisk = e.target.checked; applyFilters(); });
+    $('#f-smart').addEventListener('change', (e) => { state.smartOnly = e.target.checked; applyFilters(); });
     $('#r-q').addEventListener('input', (e) => { state.rq = e.target.value; applyFilters(); });
     $('#r-open').addEventListener('change', (e) => { state.ropen = e.target.checked; applyFilters(); });
 
@@ -357,10 +365,23 @@
       (!state.hideRisk || !(d.flags || []).some((f) => RISK.has(f))) &&
       (!state.maxCap || (isNum(d.mkt_cap) && d.mkt_cap <= state.maxCap)) &&
       (!state.minStreak || (d.rev_streak ?? 0) >= state.minStreak) &&
-      (!state.onlyNew || (isNum(d.rank_7d) === false && isNum(d.score_7d) === false)));
+      (!state.onlyNew || (isNum(d.rank_7d) === false && isNum(d.score_7d) === false)) &&
+      (!state.smartOnly || d.smart_score > 0));
     const total = state.rows.filter((r) => r.board === state.tab).length;
     $('#count').textContent = `顯示 ${state.stockTable.getDataCount('active')} 檔，共 ${total} 檔`;
   }
+
+  // ── big-money signals ───────────────────────────────────────────────────
+  const SMART = {
+    insider_cluster: { label: '內部人群買', tone: 'ok', help: '近 30 天有兩位以上的高層或董事在公開市場買進自家股票。' },
+    insider_buy: { label: '內部人買進', tone: 'ok', help: '近 30 天有內部人在公開市場買進，金額不小。' },
+    activist_13d: { label: '13D 積極持有', tone: 'warn', help: '近 90 天有人申報 Schedule 13D：持股超過 5%，而且可能想影響公司決策。' },
+    new_5pct: { label: '新增 5% 持有人', tone: 'ok', help: '近 90 天有人申報 Schedule 13G：被動持股超過 5%。' },
+  };
+  const smartChips = (d) => {
+    const t = (d.smart?.tags || []).filter((x) => SMART[x]);
+    return t.length ? `<div class="chips">${t.map((x) => `<span class="chip ${SMART[x].tone}" title="${esc(SMART[x].help)}">${esc(SMART[x].label)}</span>`).join('')}</div>` : '<span class="muted">—</span>';
+  };
 
   // ── stock table ─────────────────────────────────────────────────────────
   function glyph(d) {
@@ -419,6 +440,9 @@
         { title: '市值', field: 'mkt_cap', width: 96, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4, formatter: (c) => usd(c.getValue()) },
         { title: '日成交額', field: 'dollar_vol', width: 106, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
           headerTooltip: '20 日平均成交金額', formatter: (c) => usd(c.getValue()) },
+        { title: '大戶', field: 'smart_score', width: 150, sorter: 'number', responsive: 4,
+          headerTooltip: '內部人買進（Form 4）與新增 5% 持有人（13D/13G），資料來自 SEC，分數 0 到 100',
+          formatter: (c) => smartChips(c.getData()) },
         { title: '風險標記', field: 'flags', minWidth: 170, widthGrow: 2, headerSort: false, responsive: 6, formatter: (c) => chips(c.getValue()) },
       ],
     });
@@ -545,6 +569,7 @@
       ${pillar(1, '驗證', d.validated, `連續 ${nf(d.rev_streak)} 季營收季增，毛利率 ${pct(d.gross_margin)}。`, isNum(d.gross_margin) ? beats(d.validated) : '這檔沒有毛利率資料，這一項是以偏低的預設值估算，可信度較低。')}
       ${pillar(2, '進場', d.accessibility, `市值 ${usd(d.mkt_cap)}，20 日平均成交額 ${usd(d.dollar_vol)}，股價 $${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `Hacker News 近 30 天 ${isNum(d.hn_mentions) ? nf(d.hn_mentions) + ' 則' : '沒有資料'}，20 日平均成交額 ${usd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。目前沒有分析師與法人資料。` : '')}
+      <div class="d-section"><h3>大戶動向</h3><div id="smart-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>風險標記</h3>${f.length
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
         : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
@@ -564,7 +589,39 @@
         </dl>
       </div>`;
     showDrawer();
+    loadSmart(d);
     loadStockCharts(d.ticker);
+  }
+
+  async function loadSmart(d) {
+    const box = $('#smart-box');
+    const sm = d.smart;
+    let trades = [], holders = [];
+    try {
+      const [t, h] = await Promise.all([
+        state.sb.from('insider_trades').select('filed_at,owner,title,code,shares,price,value').eq('ticker', d.ticker).order('filed_at', { ascending: false }).limit(10),
+        state.sb.from('holder_filings').select('filed_at,form_type,holder,pct').eq('ticker', d.ticker).order('filed_at', { ascending: false }).limit(5),
+      ]);
+      trades = t.data || []; holders = h.data || [];
+    } catch (e) { /* tables not created yet */ }
+    if (state.current !== d.ticker) return;
+    if (!sm && !trades.length && !holders.length) {
+      box.innerHTML = '<p class="chart-note">近期沒有偵測到內部人買進或新增 5% 持有人。資料來自 SEC 的 Form 4 與 13D/13G，只涵蓋已評分的公司。</p>';
+      return;
+    }
+    const tags = (sm?.tags || []).filter((x) => SMART[x]);
+    const head = tags.length
+      ? `<ul class="flag-list">${tags.map((x) => `<li><span class="chip ${SMART[x].tone}">${esc(SMART[x].label)}</span><span>${esc(SMART[x].help)}</span></li>`).join('')}</ul>`
+      : '<p class="chart-note">沒有達到訊號門檻，以下是近期申報。</p>';
+    const tr = trades.length
+      ? `<table class="mini"><thead><tr><th>申報日</th><th>人員</th><th>買/賣</th><th>金額</th></tr></thead><tbody>${trades.map((x) =>
+          `<tr><td>${esc(x.filed_at)}</td><td>${esc(x.owner || '')}${x.title ? `<br><span class="muted">${esc(x.title)}</span>` : ''}</td><td class="${x.code === 'P' ? 'up' : 'down'}">${x.code === 'P' ? '買進' : '賣出'}</td><td>${isNum(x.value) ? usd(x.value) : '—'}</td></tr>`).join('')}</tbody></table>`
+      : '';
+    const hd = holders.length
+      ? `<table class="mini"><thead><tr><th>申報日</th><th>持有人</th><th>表單</th><th>持股</th></tr></thead><tbody>${holders.map((x) =>
+          `<tr><td>${esc(x.filed_at)}</td><td>${esc(x.holder || '—')}</td><td>${esc(x.form_type)}</td><td>${isNum(x.pct) ? nf(x.pct, 1) + '%' : '—'}</td></tr>`).join('')}</tbody></table>`
+      : '';
+    box.innerHTML = head + tr + hd + '<p class="chart-note">內部人買賣是公開申報，不等於看好；多人同時買進比單人買進更有參考價值。</p>';
   }
 
   async function loadStockCharts(ticker) {

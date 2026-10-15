@@ -108,6 +108,12 @@ create table if not exists public.fundamentals_cache (
   data        jsonb not null
 );
 
+-- Crawler-only cache of daily closes/volumes (one row per trading day), so each run fetches only the days it is missing.
+create table if not exists public.price_days (
+  day   date primary key,
+  bars  jsonb not null
+);
+
 -- ───────────────────────── Views ─────────────────────────
 
 -- Everything the dashboard table needs, for the latest scoring day.
@@ -146,6 +152,7 @@ alter table public.price_series       enable row level security;
 alter table public.fundraises         enable row level security;
 alter table public.crawl_runs         enable row level security;
 alter table public.fundamentals_cache enable row level security;
+alter table public.price_days         enable row level security;
 
 -- Start clean so re-running this file never stacks duplicate policies.
 do $$
@@ -170,7 +177,7 @@ end $$;
 
 -- ── OPTION B: public read (anyone with the page URL can read the data). ──
 -- To switch: comment out the Option A block, uncomment this one, re-run the whole file, and set REQUIRE_LOGIN: false.
--- Think twice: the numbers are derived from Yahoo Finance data, whose terms are written for personal use.
+-- Think twice: the numbers are derived from Stooq price data, whose terms are written for personal use.
 --
 -- do $$
 -- declare t text;
@@ -188,3 +195,23 @@ grant select on public.entities, public.signals, public.scores, public.price_ser
   to anon, authenticated;
 grant all on all tables in schema public to service_role;
 grant usage, select on all sequences in schema public to service_role;
+
+-- ── Big-money layer (Form 4 insider trades, 13D/13G holders) ──
+create table if not exists public.insider_trades (accession text not null, line int not null, ticker text not null, cik text, filed_at date not null, tx_date date, owner text, title text, is_officer boolean, is_director boolean, is_ten_pct boolean, code text, shares numeric, price numeric, value numeric, primary key (accession, line));
+create table if not exists public.holder_filings (accession text primary key, ticker text not null, cik text, filed_at date not null, form_type text, holder text, shares numeric, pct numeric);
+create table if not exists public.smart_seen (accession text primary key, filed_at date not null);
+create table if not exists public.smart_money (ticker text primary key, as_of date, updated_at timestamptz, score numeric default 0, tags jsonb default '[]'::jsonb, buyers_30d int, buy_value_30d numeric, officer_buyers_30d int, sellers_30d int, sell_value_30d numeric, n_13d_90d int, n_13g_90d int, detail jsonb);
+create index if not exists insider_trades_ticker on public.insider_trades (ticker, filed_at desc);
+create index if not exists holder_filings_ticker on public.holder_filings (ticker, filed_at desc);
+alter table public.insider_trades enable row level security;
+alter table public.holder_filings enable row level security;
+alter table public.smart_seen enable row level security;
+alter table public.smart_money enable row level security;
+drop policy if exists read_authenticated on public.insider_trades;
+create policy read_authenticated on public.insider_trades for select to authenticated using (true);
+drop policy if exists read_authenticated on public.holder_filings;
+create policy read_authenticated on public.holder_filings for select to authenticated using (true);
+drop policy if exists read_authenticated on public.smart_money;
+create policy read_authenticated on public.smart_money for select to authenticated using (true);
+grant select on public.insider_trades, public.holder_filings, public.smart_money to authenticated;
+grant all on public.insider_trades, public.holder_filings, public.smart_seen, public.smart_money to service_role;
