@@ -50,7 +50,7 @@ def run_public(store) -> dict:
     stats["universe"] = len(uni)
     print(f"universe: {len(uni)} tickers")
 
-    px, closes, as_of, _ = prices.load_prices(list(uni["ticker"]))
+    px, closes, as_of, _ = prices.load_prices(list(uni["ticker"]), store)
     stats["priced"] = len(px)
     stats["as_of"] = as_of.isoformat()
 
