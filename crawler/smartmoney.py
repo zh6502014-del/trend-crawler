@@ -261,7 +261,10 @@ def run_smart(store, today: dt.date | None = None) -> dict:
         raise RuntimeError("EDGAR daily index unreachable for every day (blocked or User-Agent rejected?)")
     stats["listed"] = len(filings)
 
-    todo = sorted((f for f in filings if f["accession"] not in known), key=lambda f: f["filed_at"] or today, reverse=True)
+    uniq: dict[str, dict] = {}
+    for f in filings:  # one filing can be listed several times (one line per filer / subject company)
+        uniq.setdefault(f["accession"], f)
+    todo = sorted((f for f in uniq.values() if f["accession"] not in known), key=lambda f: f["filed_at"] or today, reverse=True)
     if len(todo) > cfg.MAX_SMART_FETCH_PER_RUN:
         stats["deferred"] = len(todo) - cfg.MAX_SMART_FETCH_PER_RUN  # picked up by the next runs, newest first
         todo = todo[: cfg.MAX_SMART_FETCH_PER_RUN]

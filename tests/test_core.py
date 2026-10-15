@@ -547,3 +547,11 @@ def test_industry_sector_and_fill():
     st.upsert("entities", [{"ticker": "AAA", "sector": "能源", "industry": "Crude Petroleum"}], "ticker")
     out = industry.fill(st, ["AAA"], {"AAA": 1}, budget=0)
     assert out["AAA"]["sector"] == "能源"
+
+
+def test_run_smart_dedupes_accessions_listed_twice():
+    import datetime as dt
+    from crawler import smartmoney
+    text = "x\n-----\n111|ACME|SC 13D|20261012|edgar/data/111/0000000001-26-000001.txt\n222|HOLDER LP|SC 13D|20261012|edgar/data/111/0000000001-26-000001.txt\n"
+    rows = smartmoney.parse_index(text, {"111", "222"})
+    assert len({r["accession"] for r in rows}) == 1 and len(rows) == 2
