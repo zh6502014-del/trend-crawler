@@ -596,3 +596,20 @@ def test_main_board_is_capped_to_best_scores(monkeypatch):
         eligible = rest[~rest["flags"].map(lambda f: "data_thin" in f) & rest["mkt_cap"].between(cfg.MAIN_CAP_MIN, cfg.MAIN_CAP_MAX)
                         & (rest["dollar_vol"] >= cfg.MIN_DOLLAR_VOL) & (rest["price"] >= cfg.MIN_PRICE)]
         assert (eligible["score"] <= main["score"].min()).all()
+
+
+def test_holder_under_five_percent_is_not_a_signal():
+    from crawler import smartmoney as sm
+    today = dt.date(2026, 10, 14)
+    mk = lambda form, pct: {"form_type": form, "filed_at": today, "pct": pct, "holder": "X"}
+    assert sm.compute_signals([], [mk("SCHEDULE 13D", 0.7), mk("SCHEDULE 13G", 1.2)], today)["tags"] == []
+    sig = sm.compute_signals([], [mk("SCHEDULE 13D", 8.7), mk("SCHEDULE 13G", 5.2)], today)
+    assert "activist_13d" in sig["tags"] and "new_5pct" in sig["tags"]
+
+
+def test_form_cu_real_shape_does_not_use_cost_of_goods_sold():
+    from crawler import formc
+    xml = (b"<edgarSubmission><offeringInformation><offeringAmount>9995.64</offeringAmount><maximumOfferingAmount>5000000</maximumOfferingAmount>"
+           b"<noOfSecurityOffered>9333</noOfSecurityOffered><price>1.05</price></offeringInformation>"
+           b"<costGoodsSoldMostRecentFiscalYear>2386338</costGoodsSoldMostRecentFiscalYear></edgarSubmission>")
+    assert formc.parse_form_cu(xml)["raised"] == 9995.64

@@ -29,6 +29,7 @@ WANTED = FORM4 | SCHED_13D | SCHED_13G
 PTS = {"cluster": 50, "extra_buyer": 10, "officer": 15, "big_buy": 10, "activist_13d": 35, "new_5pct": 20}
 BIG_BUY_USD = 250_000
 SINGLE_BUY_USD = 100_000
+MIN_HOLDER_PCT = 5.0
 
 
 def _local(tag: str) -> str:
@@ -169,7 +170,9 @@ def compute_signals(trades: list[dict], holders: list[dict], today: dt.date) -> 
     officers = {t.get("owner") for t in buys if t.get("owner") and (t.get("is_officer") or t.get("is_director"))}
     buy_val = sum(t.get("value") or 0 for t in buys)
     sell_val = sum(t.get("value") or 0 for t in sells)
-    h90 = [h for h in holders if h.get("filed_at") and h["filed_at"] >= lo90]
+    # a holder reporting under 5% (typically an exit or a group member) is not a new 5% holder or an activist
+    h90 = [h for h in holders if h.get("filed_at") and h["filed_at"] >= lo90
+           and (h.get("pct") is None or h["pct"] >= MIN_HOLDER_PCT)]
     n13d = [h for h in h90 if "13D" in (h.get("form_type") or "") and not (h.get("form_type") or "").endswith("/A")]
     n13g = [h for h in h90 if "13G" in (h.get("form_type") or "") and not (h.get("form_type") or "").endswith("/A")]
 

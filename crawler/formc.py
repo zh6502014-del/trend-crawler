@@ -132,8 +132,11 @@ def parse_form_cu(xml_bytes: bytes) -> dict:
         v = _to_num(t)
         if v is not None and not re.fullmatch(r"\d{4}-?\d{2}-?\d{2}", t):
             nums.setdefault(_local(e.tag), v)
-    raised = next((v for k, v in nums.items() if re.search(r"(raised|sold|proceeds)", k, re.I) or
-                   re.search(r"^(current|total).*amount", k, re.I)), None)
+    # Real C-U filings carry no "raised" tag. Checked against stored filings: `offeringAmount` is the amount sold so far
+    # (≈ noOfSecurityOffered × price), while costGoodsSold* must never be mistaken for it ("...GoodsSOLD").
+    explicit = next((v for k, v in nums.items() if "costgoods" not in k.lower()
+                     and re.search(r"(amount|total|proceeds).*(sold|raised)|(sold|raised).*(amount|total)", k, re.I)), None)
+    raised = explicit if explicit is not None else nums.get("offeringAmount")
     return {"raised": raised, "raw": {k: v for k, v in list(nums.items())[:25]}}
 
 
