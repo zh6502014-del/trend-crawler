@@ -1,6 +1,3 @@
-# yfinance is an unofficial Yahoo wrapper and breaks whenever Yahoo changes things:
-# keep the lower bound only, so a fresh install always picks up the latest fix.
-yfinance>=0.2.54
 pandas>=2.1
 numpy>=1.26
 requests>=2.31

@@ -1,17 +1,30 @@
-"""Bulk daily prices via yfinance (unofficial Yahoo wrapper) and the metrics we derive from them."""
+"""Daily prices from Massive (formerly Polygon.io) free plan, and the metrics we derive from them.
+
+The "grouped daily" endpoint returns OHLCV for EVERY US stock on one date in a single call, so ~150 trading days of
+history for the whole market costs ~150 calls (the free plan allows 5 calls/minute, so ~30 minutes per run).
+"""
 from __future__ import annotations
 
 import datetime as dt
+import os
 import time
 
 import numpy as np
 import pandas as pd
+import requests
 
 from . import config as cfg
 
+GROUPED_URL = "https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}"
+HISTORY_DAYS = 215   # calendar days (~150 trading days)
+
+
+class PriceSourceError(RuntimeError):
+    pass
+
 
 def price_metrics(close: pd.Series, volume: pd.Series) -> dict | None:
-    """Pure function: one ticker's daily close/volume → metrics. None if there isn't enough history."""
+    """Pure function: one ticker's daily close/volume -> metrics. None if there isn't enough history."""
     close = pd.to_numeric(close, errors="coerce").dropna()
     if len(close) < 130:
         return None
@@ -34,65 +47,79 @@ def price_metrics(close: pd.Series, volume: pd.Series) -> dict | None:
     }
 
 
-def _split(raw: pd.DataFrame, batch: list[str]):
-    """Yield (ticker, close, volume) from a yf.download frame, whatever shape it came back in."""
-    if raw is None or raw.empty:
-        return
-    if isinstance(raw.columns, pd.MultiIndex):
-        top = set(raw.columns.get_level_values(0))
-        for t in batch:
-            if t in top:
-                sub = raw[t]
-                if "Close" in sub and "Volume" in sub:
-                    yield t, sub["Close"], sub["Volume"]
-    elif len(batch) == 1 and "Close" in raw:
-        yield batch[0], raw["Close"], raw["Volume"]
+def parse_grouped(payload: dict) -> list[dict]:
+    """One grouped-daily response -> [{T, c, v}]. Empty list on holidays."""
+    return [{"T": r["T"], "c": r.get("c"), "v": r.get("v")} for r in (payload.get("results") or []) if r.get("T")]
+
+
+def _fetch_day(session, day: dt.date, key: str):
+    """Returns list of bars, [] for market holidays, raises PriceSourceError on auth/plan problems."""
+    for attempt in range(4):
+        r = session.get(GROUPED_URL.format(day=day.isoformat()), params={"adjusted": "true", "apiKey": key}, timeout=60)
+        if r.status_code == 429:  # free plan: 5 calls/minute
+            time.sleep(15 * (attempt + 1))
+            continue
+        if r.status_code == 403 and "before end of day" in r.text.lower():
+            return []  # that day is not published yet (free plan): skip it, the previous day becomes as_of
+        if r.status_code in (401, 403):
+            raise PriceSourceError(f"Price API refused the request ({r.status_code}): check MASSIVE_API_KEY / plan. {r.text[:150]}")
+        r.raise_for_status()
+        return parse_grouped(r.json())
+    raise PriceSourceError("Price API kept rate-limiting us (429).")
+
+
+def frames_from_bars(by_day: dict[dt.date, list[dict]], tickers: list[str]):
+    """{day: bars} -> (close DataFrame, volume DataFrame), columns = SPY + wanted tickers."""
+    want = set(tickers) | {"SPY"}
+    close: dict[dt.date, dict] = {}
+    vol: dict[dt.date, dict] = {}
+    for d, bars in by_day.items():
+        if not bars:
+            continue
+        close[d] = {b["T"]: b["c"] for b in bars if b["T"] in want and b["c"] is not None}
+        vol[d] = {b["T"]: b["v"] for b in bars if b["T"] in want and b["v"] is not None}
+    c = pd.DataFrame.from_dict(close, orient="index").sort_index()
+    v = pd.DataFrame.from_dict(vol, orient="index").sort_index()
+    c.index = pd.to_datetime(c.index)
+    v.index = pd.to_datetime(v.index)
+    return c, v
 
 
 def load_prices(tickers: list[str]):
     """Returns (metrics DataFrame indexed by ticker, {ticker: close Series}, as_of date, SPY 6m return)."""
-    import yfinance as yf
+    key = os.getenv("MASSIVE_API_KEY") or os.getenv("POLYGON_API_KEY")
+    if not key:
+        raise PriceSourceError("MASSIVE_API_KEY is not set (free key from massive.com).")
+    today = dt.date.today()
+    days = [today - dt.timedelta(days=i) for i in range(1, HISTORY_DAYS) if (today - dt.timedelta(days=i)).weekday() < 5]
+    by_day: dict[dt.date, list[dict]] = {}
+    s = requests.Session()
+    for i, d in enumerate(sorted(days)):
+        by_day[d] = _fetch_day(s, d, key)
+        if i < len(days) - 1:
+            time.sleep(cfg.PRICE_PAUSE)
+    close, volume = frames_from_bars(by_day, tickers)
+    if "SPY" not in close or close["SPY"].dropna().shape[0] < 130:
+        raise PriceSourceError("Could not load enough SPY benchmark history from the price API.")
+    spy_close = close["SPY"].dropna()
 
     rows: dict[str, dict] = {}
     closes: dict[str, pd.Series] = {}
-    spy_close = None
-    failed_batches = 0
-    batches = [tickers[i : i + cfg.PRICE_CHUNK] for i in range(0, len(tickers), cfg.PRICE_CHUNK)]
-
-    for i, batch in enumerate(batches):
-        want = (["SPY"] + batch) if i == 0 else batch
-        try:
-            raw = yf.download(
-                want, period="1y", interval="1d", auto_adjust=True,
-                group_by="ticker", threads=True, progress=False,
-            )
-        except Exception as e:  # network hiccup / rate limit: skip this batch, keep going
-            failed_batches += 1
-            print(f"  price batch {i + 1}/{len(batches)} failed: {e!r}")
-            time.sleep(5)
+    for t in tickers:
+        if t not in close:
             continue
-        for t, c, v in _split(raw, want):
-            if t == "SPY":
-                spy_close = pd.to_numeric(c, errors="coerce").dropna()
-                continue
-            m = price_metrics(c, v)
-            if m:
-                rows[t] = m
-                closes[t] = pd.to_numeric(c, errors="coerce").dropna()
-        time.sleep(1.0)
-
-    if spy_close is None or len(spy_close) < 130:
-        raise RuntimeError("Could not load SPY benchmark prices — Yahoo may be rate-limiting or down.")
+        m = price_metrics(close[t], volume[t] if t in volume else pd.Series(dtype=float))
+        if m:
+            rows[t] = m
+            closes[t] = close[t].dropna()
     if not rows:
-        raise RuntimeError("No price data came back for any ticker.")
+        raise PriceSourceError("No usable price history came back for any ticker.")
 
     as_of: dt.date = pd.Timestamp(spy_close.index[-1]).date()
     spy_6m = float(spy_close.iloc[-1] / spy_close.iloc[-127] - 1)
-
     df = pd.DataFrame.from_dict(rows, orient="index")
-    # Drop stale quotes (halted / delisted): last bar more than 5 days behind the benchmark.
-    df = df[df["last_date"].map(lambda d: (as_of - d).days <= 5)]
+    df = df[df["last_date"].map(lambda d: (as_of - d).days <= 5)]  # drop stale quotes (halted / delisted)
     df["rs_6m"] = df["ret_6m"] - spy_6m
     closes = {t: closes[t] for t in df.index}
-    print(f"  priced {len(df)} tickers, as_of {as_of}, failed batches {failed_batches}")
+    print(f"  priced {len(df)} of {len(tickers)} tickers, as_of {as_of}, {len(days)} days fetched")
     return df, closes, as_of, spy_6m

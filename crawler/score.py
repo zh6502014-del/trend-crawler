@@ -92,6 +92,7 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
                 "analyst_count": _pct(pd.to_numeric(d["analyst_count"], errors="coerce").fillna(0), "min"),
                 "inst_pct": _pct(d["inst_pct"], "min"),
                 "hn_mentions": _pct(np.log1p(pd.to_numeric(d["hn_mentions"], errors="coerce")), "min"),
+                "dollar_vol": _pct(d["dollar_vol"], "min"),
             }
         ),
         cfg.ATTENTION_W,

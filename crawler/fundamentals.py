@@ -1,121 +1,195 @@
-"""Per-ticker fundamentals. Slow (2 Yahoo calls per name), so results are cached for a week."""
+"""Per-company fundamentals from SEC EDGAR XBRL "companyfacts" (official, free, no API key).
+
+One request per company (https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json), cached for a week.
+XBRL gives quarterly revenue / gross profit / net income, cash, debt, equity and the cover-page share count.
+It does NOT give analyst counts, institutional ownership or sector (left empty; the score ignores them).
+Market cap is price x shares, computed in run.py.
+"""
 from __future__ import annotations
 
 import datetime as dt
 import time
 
-import numpy as np
 import pandas as pd
+import requests
 
 from . import config as cfg
 from .store import utcnow
+
+COMPANYFACTS = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+
+REVENUE_TAGS = ("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueGoodsNet")
+GROSS_PROFIT_TAGS = ("GrossProfit",)
+COST_TAGS = ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold")
+NET_INCOME_TAGS = ("NetIncomeLoss", "ProfitLoss")
+CASH_TAGS = ("CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents")
+DEBT_TAGS = ("LongTermDebt", "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations")
+EQUITY_TAGS = ("StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest")
+
+_CIKS: dict[str, int] = {}  # ticker -> CIK, filled by refresh_cache
 
 
 class RateLimited(Exception):
     pass
 
 
-def _is_rate_limit(e: Exception) -> bool:
-    s = f"{type(e).__name__} {e}".lower()
-    return "ratelimit" in s or "too many requests" in s or "rate limit" in s or "429" in s
+def _date(s: str) -> dt.date:
+    return dt.date.fromisoformat(s[:10])
 
 
-def _num(x):
-    try:
-        f = float(x)
-    except (TypeError, ValueError):
-        return None
-    return None if (np.isnan(f) or np.isinf(f)) else f
+def _facts(cf: dict, tags, unit: str = "USD", taxonomy: str = "us-gaap") -> list[tuple[str, list[dict]]]:
+    out = []
+    node = (cf.get("facts") or {}).get(taxonomy) or {}
+    for t in tags:
+        rows = ((node.get(t) or {}).get("units") or {}).get(unit)
+        if rows:
+            out.append((t, rows))
+    return out
 
 
-def _series(qis, labels) -> pd.Series | None:
-    if qis is None or getattr(qis, "empty", True):
-        return None
-    for label in labels:
-        if label in qis.index:
-            row = qis.loc[label]
-            if isinstance(row, pd.DataFrame):
-                row = row.iloc[0]
-            s = pd.to_numeric(row, errors="coerce").dropna()
-            if s.empty:
-                continue
-            s.index = pd.to_datetime(s.index)
-            return s.sort_index()
-    return None
+def _dedupe(rows: list[dict]) -> dict[tuple, float]:
+    """(start, end) -> value, keeping the most recently filed figure for each period."""
+    best: dict[tuple, tuple[str, float]] = {}
+    for r in rows:
+        if r.get("val") is None or not r.get("end"):
+            continue
+        key = (r.get("start"), r["end"])
+        filed = r.get("filed") or ""
+        if key not in best or filed >= best[key][0]:
+            best[key] = (filed, float(r["val"]))
+    return {k: v for k, (_, v) in best.items()}
 
 
-def parse_fundamentals(info: dict, qis: pd.DataFrame | None) -> dict:
-    """Pure function: Yahoo `info` dict + quarterly income statement → the fields we score on."""
-    info = info or {}
-    rev = _series(qis, ("Total Revenue", "Operating Revenue", "Revenue"))
-    gp = _series(qis, ("Gross Profit",))
-
-    rev_yoy = None
-    streak = None
-    quarters = 0
-    gross_margin = _num(info.get("grossMargins"))
-    if rev is not None and len(rev) >= 2:
-        v = rev.values.astype(float)
-        quarters = len(v)
-        s = 0
-        for i in range(len(v) - 1, 0, -1):  # consecutive sequential increases, newest first
-            if v[i] > v[i - 1]:
-                s += 1
-            else:
+def quarterly_series(rows: list[dict]) -> list[tuple[dt.date, float]]:
+    """Flow items (revenue, income): 3-month values, plus Q4 derived as fiscal year minus the 9-month figure."""
+    d = _dedupe(rows)
+    quarters: dict[dt.date, float] = {}
+    for (start, end), v in d.items():
+        if not start:
+            continue
+        days = (_date(end) - _date(start)).days
+        if 80 <= days <= 100:
+            quarters[_date(end)] = v
+    for (start, end), v in d.items():  # Q4 = annual - nine months
+        if not start:
+            continue
+        days = (_date(end) - _date(start)).days
+        if not 350 <= days <= 380 or _date(end) in quarters:
+            continue
+        for (s2, e2), v2 in d.items():
+            if s2 == start and 255 <= (_date(e2) - _date(s2)).days <= 285 and 80 <= (_date(end) - _date(e2)).days <= 100:
+                quarters[_date(end)] = v - v2
                 break
-        streak = s
-        if len(v) >= 5 and v[-5] > 0:
-            rev_yoy = float(v[-1] / v[-5] - 1)
-        if gp is not None and rev.index[-1] in gp.index and v[-1] > 0:
-            gross_margin = float(gp.loc[rev.index[-1]] / v[-1])
-    if rev_yoy is None:
-        rev_yoy = _num(info.get("revenueGrowth"))
+    return sorted(quarters.items())
 
-    cash, fcf = _num(info.get("totalCash")), _num(info.get("freeCashflow"))
-    runway = float(cash / (-fcf / 12)) if (cash is not None and fcf is not None and fcf < 0) else None
 
-    return {
-        "ok": _num(info.get("marketCap")) is not None,
-        "name": info.get("longName") or info.get("shortName"),
-        "sector": info.get("sector"),
-        "industry": info.get("industry"),
-        "country": info.get("country"),
-        "mkt_cap": _num(info.get("marketCap")),
-        "shares_out": _num(info.get("sharesOutstanding")),
-        "analyst_count": _num(info.get("numberOfAnalystOpinions")) or 0,
-        "inst_pct": _num(info.get("heldPercentInstitutions")),
-        "gross_margin": gross_margin,
-        "profit_margin": _num(info.get("profitMargins")),
-        "debt_to_equity": _num(info.get("debtToEquity")),
-        "rev_yoy": rev_yoy,
-        "rev_streak": streak,
-        "quarters": quarters,
-        "runway_months": runway,
-    }
+def _best_quarterly(cf: dict, tags) -> list[tuple[dt.date, float]]:
+    """Of several candidate tags, take the one that reaches the most recent quarter (then the longest history)."""
+    best: list[tuple[dt.date, float]] = []
+    for _, rows in _facts(cf, tags):
+        s = quarterly_series(rows)
+        if s and (not best or (s[-1][0], len(s)) > (best[-1][0], len(best))):
+            best = s
+    return best
+
+
+def _latest_instant(cf: dict, tags, taxonomy: str = "us-gaap", unit: str = "USD"):
+    best = None
+    for _, rows in _facts(cf, tags, unit=unit, taxonomy=taxonomy):
+        for r in rows:
+            if r.get("start") or r.get("val") is None:
+                continue
+            key = (r["end"], r.get("filed") or "")
+            if best is None or key > best[0]:
+                best = (key, float(r["val"]))
+    return None if best is None else best[1]
+
+
+def _shares(cf: dict):
+    rows = []
+    for _, r in _facts(cf, ("EntityCommonStockSharesOutstanding",), unit="shares", taxonomy="dei"):
+        rows += r
+    if not rows:
+        return None
+    last = max(r["end"] for r in rows)
+    vals = [float(r["val"]) for r in rows if r["end"] == last and r.get("val")]
+    return max(vals) if vals else None  # several share classes report separately: the largest is a floor, not a sum
+
+
+def parse_companyfacts(cf: dict, today: dt.date | None = None) -> dict:
+    """Pure function: SEC companyfacts JSON -> the fields we score on."""
+    today = today or dt.date.today()
+    rev = _best_quarterly(cf, REVENUE_TAGS)
+    shares = _shares(cf)
+    out = {"ok": False, "name": cf.get("entityName"), "sector": None, "industry": None, "country": None,
+           "mkt_cap": None, "shares_out": shares, "analyst_count": None, "inst_pct": None,
+           "gross_margin": None, "profit_margin": None, "debt_to_equity": None, "rev_yoy": None,
+           "rev_streak": None, "quarters": 0, "runway_months": None}
+    if not rev or shares is None or (today - rev[-1][0]).days > 550:
+        return out
+
+    out["ok"] = True
+    rev = rev[-8:]
+    out["quarters"] = len(rev)
+    last_end, last_rev = rev[-1]
+
+    streak = 0
+    for i in range(len(rev) - 1, 0, -1):  # consecutive sequential increases, newest first, no gaps
+        gap = (rev[i][0] - rev[i - 1][0]).days
+        if gap <= 120 and rev[i][1] > rev[i - 1][1]:
+            streak += 1
+        else:
+            break
+    out["rev_streak"] = streak
+
+    for end, val in rev[:-1]:  # same quarter one year earlier
+        if abs((last_end - end).days - 365) <= 20 and val > 0:
+            out["rev_yoy"] = last_rev / val - 1
+
+    if last_rev > 0:
+        gp = dict(_best_quarterly(cf, GROSS_PROFIT_TAGS))
+        cost = dict(_best_quarterly(cf, COST_TAGS))
+        if last_end in gp:
+            out["gross_margin"] = gp[last_end] / last_rev
+        elif last_end in cost:
+            out["gross_margin"] = (last_rev - cost[last_end]) / last_rev
+        ni = dict(_best_quarterly(cf, NET_INCOME_TAGS))
+        if last_end in ni:
+            out["profit_margin"] = ni[last_end] / last_rev
+            cash = _latest_instant(cf, CASH_TAGS)
+            if ni[last_end] < 0 and cash is not None:  # proxy: burn = net loss, not free cash flow
+                out["runway_months"] = cash / (-ni[last_end] / 3)
+
+    debt, equity = _latest_instant(cf, DEBT_TAGS), _latest_instant(cf, EQUITY_TAGS)
+    if debt is not None and equity is not None and equity > 0:
+        out["debt_to_equity"] = debt / equity * 100  # percentage
+    return out
 
 
 def fetch_fundamentals(ticker: str) -> dict:
-    """Network call. Raises RateLimited so the caller can stop instead of hammering Yahoo."""
-    import yfinance as yf
-
+    """Network call. Raises RateLimited so the caller can stop instead of hammering the SEC."""
+    cik = _CIKS.get(ticker)
+    if not cik:
+        return {"ok": False}
     try:
-        tk = yf.Ticker(ticker)
-        info = tk.info or {}
-        try:
-            qis = tk.quarterly_income_stmt
-        except Exception as e:
-            if _is_rate_limit(e):
-                raise
-            qis = None
-        return parse_fundamentals(info, qis)
+        r = requests.get(COMPANYFACTS.format(cik=int(cik)), headers=cfg.sec_headers(), timeout=60)
+        if r.status_code == 404:  # no XBRL financials (foreign filers, trusts): legitimately empty
+            return {"ok": False}
+        if r.status_code in (403, 429):
+            raise RateLimited(f"SEC returned {r.status_code}")
+        r.raise_for_status()
+        return parse_companyfacts(r.json())
+    except RateLimited:
+        raise
     except Exception as e:
-        if _is_rate_limit(e):
-            raise RateLimited(str(e)) from e
         return {"ok": False, "error": type(e).__name__}
 
 
-def refresh_cache(store, tickers: list[str], now: dt.datetime | None = None) -> tuple[dict, dict]:
+def refresh_cache(store, tickers: list[str], now: dt.datetime | None = None, ciks: dict | None = None):
     """Load the cache, refresh missing/stale entries within budget, return ({ticker: data}, stats)."""
+    if ciks:
+        _CIKS.update({t: int(c) for t, c in ciks.items() if c is not None and not pd.isna(c)})
     now = now or utcnow()
     rows = store.select("fundamentals_cache", {"select": "ticker,fetched_at,data", "order": "ticker"})
     cache = {r["ticker"]: r for r in rows}
@@ -151,7 +225,7 @@ def refresh_cache(store, tickers: list[str], now: dt.datetime | None = None) -> 
                 break
             time.sleep(5)
             continue
-        if data.get("error"):  # transient failure (network, parse): don't cache it for a week, retry next run
+        if data.get("error"):  # transient failure: don't cache it for a week, retry next run
             stats["failed"] += 1
             time.sleep(cfg.REQUEST_PAUSE)
             continue
