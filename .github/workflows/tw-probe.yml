@@ -1,0 +1,52 @@
+name: tw-probe
+
+# One-off: fetch a few records from each Taiwan open-data endpoint and save them under samples/tw/,
+# so the parser can be written against real field names. Safe to delete afterwards.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch samples
+        run: |
+          mkdir -p samples/tw
+          probe() {  # name url
+            code=$(curl -sS -m 60 -L -A "Mozilla/5.0" -H "Accept: application/json" -o "/tmp/$1.raw" -w "%{http_code}" "$2" || echo 000)
+            size=$(wc -c < "/tmp/$1.raw" 2>/dev/null || echo 0)
+            echo "$1 http=$code bytes=$size"
+            python3 - "$1" "$2" "$code" <<'PY'
+          import json, sys
+          name, url, code = sys.argv[1:4]
+          out = {"url": url, "http": code}
+          try:
+              raw = open(f"/tmp/{name}.raw", "rb").read()
+              data = json.loads(raw)
+              out["count"] = len(data) if isinstance(data, list) else None
+              out["sample"] = data[:3] if isinstance(data, list) else data
+          except Exception as e:
+              out["error"] = repr(e)
+              out["head"] = open(f"/tmp/{name}.raw", "rb").read(300).decode("utf-8", "replace") if True else ""
+          json.dump(out, open(f"samples/tw/{name}.json", "w"), ensure_ascii=False, indent=1)
+          PY
+          }
+          probe twse_daily     "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+          probe twse_revenue   "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
+          probe twse_company   "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+          probe tpex_daily     "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+          probe tpex_revenue   "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
+          probe tpex_company   "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+          probe twse_pe        "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+          probe twse_inst      "https://openapi.twse.com.tw/v1/fund/T86"
+      - name: Commit samples
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add samples/tw
+          git commit -m "tw-probe: endpoint samples" || echo "nothing to commit"
+          git push
