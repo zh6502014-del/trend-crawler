@@ -493,6 +493,18 @@ def test_report_card_excess_vs_spy():
     assert report.compute_report({d[0]: ["A", "B", "C"]}, closes, horizons=(9,)) == []
 
 
+def test_report_card_board_baseline():
+    import datetime as dt
+    from crawler import report
+    d = [dt.date(2026, 10, 1) + dt.timedelta(days=i) for i in range(8)]
+    names = [f"T{i}" for i in range(30)]
+    closes = {x: {"SPY": 100.0, **{t: 10 * (1 + (0.02 if j < 3 else 0.0) * i) for j, t in enumerate(names)}} for i, x in enumerate(d)}
+    out = report.compute_report({d[0]: names[:3]}, closes, horizons=(5,), boards={d[0]: names})
+    r = out[0]
+    assert abs(r["board_ret"] - 0.1 * 3 / 30) < 1e-3 and abs(r["edge_board"] - (0.1 - 0.01)) < 1e-3
+    assert abs(r["top10_ret"] - 0.1) < 1e-3 or r["top10_ret"] < 0.1
+
+
 def test_run_report_end_to_end():
     import datetime as dt
     from crawler import report

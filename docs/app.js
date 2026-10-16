@@ -399,6 +399,8 @@
         <div class="rc-big ${avg('excess') >= 0 ? 'up' : 'down'}">${pct1(avg('excess'))}</div>
         <div class="muted">平均超額報酬（對比 SPY）</div>
         <ul><li>平均報酬 ${pct1(avg('avg_ret'))}，SPY ${pct1(avg('spy_ret'))}</li>
+        ${r.some((x) => x.edge_board != null) ? `<li>對比整個主榜平均（等於隨機選股）：${pct1(r.filter((x) => x.edge_board != null).reduce((a, x) => a + Number(x.edge_board), 0) / r.filter((x) => x.edge_board != null).length)}</li>` : ''}
+        ${r.some((x) => x.top10_ret != null) ? `<li>前 10 名平均報酬 ${pct1(r.filter((x) => x.top10_ret != null).reduce((a, x) => a + Number(x.top10_ret), 0) / r.filter((x) => x.top10_ret != null).length)}</li>` : ''}
         <li>${r.length} 份榜單中，${Math.round(win * 100)}% 贏過 SPY</li>
         <li>平均每份榜單有 ${Math.round(avg('hit_rate') * 100)}% 的股票贏過 SPY</li></ul></div>`;
     }).join('');

@@ -218,6 +218,9 @@ grant all on public.insider_trades, public.holder_filings, public.smart_seen, pu
 
 -- ── Report card (how past top-20 lists did vs SPY) ──
 create table if not exists public.report_card (as_of date not null, horizon int not null, n int, avg_ret numeric, spy_ret numeric, excess numeric, hit_rate numeric, best text, best_ret numeric, worst text, worst_ret numeric, exit_day date, primary key (as_of, horizon));
+alter table public.report_card add column if not exists top10_ret numeric;
+alter table public.report_card add column if not exists board_ret numeric;
+alter table public.report_card add column if not exists edge_board numeric;
 alter table public.report_card enable row level security;
 drop policy if exists read_authenticated on public.report_card;
 create policy read_authenticated on public.report_card for select to authenticated using (true);

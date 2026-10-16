@@ -18,9 +18,11 @@ def _d(v) -> dt.date:
     return v if isinstance(v, dt.date) else dt.date.fromisoformat(str(v)[:10])
 
 
-def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS) -> list[dict]:
+def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS, boards: dict | None = None) -> list[dict]:
     """cohorts: {as_of: [ticker, ...]}; closes: {day: {ticker: close}} (must include 'SPY').
 
+    boards: optional {as_of: [every main-board ticker]}. Its equal-weight return is the "random pick" baseline
+    (the expected result of choosing names from the board without any ranking) → board_ret / edge_board.
     Returns one row per (as_of, horizon) that has enough later price days. Names without both prices are skipped.
     """
     days = sorted(closes)
@@ -42,7 +44,16 @@ def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS) -> list[dict]
             avg = sum(rets.values()) / len(rets)
             best = max(rets, key=rets.get)
             worst = min(rets, key=rets.get)
-            out.append({
+            top10 = [t for t in tickers[:10] if t in rets]
+            extra = {}
+            if top10:
+                extra["top10_ret"] = round(sum(rets[t] for t in top10) / len(top10), 4)
+            allb = [c1[t] / c0[t] - 1 for t in (boards or {}).get(as_of, []) if c0.get(t) and c1.get(t)]
+            if len(allb) >= 20:
+                bret = sum(allb) / len(allb)
+                extra["board_ret"] = round(bret, 4)
+                extra["edge_board"] = round(avg - bret, 4)
+            out.append({**extra,
                 "as_of": as_of.isoformat(), "horizon": h, "n": len(rets), "avg_ret": round(avg, 4),
                 "spy_ret": round(spy, 4), "excess": round(avg - spy, 4),
                 "hit_rate": round(sum(1 for r in rets.values() if r > spy) / len(rets), 4),
@@ -55,18 +66,27 @@ def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS) -> list[dict]
 def run_report(store, today: dt.date | None = None) -> dict:
     today = today or dt.date.today()
     lo = (today - dt.timedelta(days=LOOKBACK_DAYS)).isoformat()
-    rows = store.select("scores", {"select": "ticker,as_of,rank", "board": "eq.main", "rank": f"lte.{TOP_N}",
-                                   "as_of": f"gte.{lo}"})
+    rows = store.select("scores", {"select": "ticker,as_of,rank", "board": "eq.main", "as_of": f"gte.{lo}"})
+    rows.sort(key=lambda r: (str(r["as_of"]), r["rank"]))
     cohorts: dict[dt.date, list[str]] = {}
+    boards: dict[dt.date, list[str]] = {}
     for r in rows:
-        cohorts.setdefault(_d(r["as_of"]), []).append(r["ticker"])
+        d = _d(r["as_of"])
+        boards.setdefault(d, []).append(r["ticker"])
+        if r["rank"] <= TOP_N:
+            cohorts.setdefault(d, []).append(r["ticker"])
     if not cohorts:
         print("  report: no score history yet")
         return {"cohorts": 0, "rows": 0}
     pd_rows = store.select("price_days", {"select": "day,bars", "day": f"gte.{min(cohorts).isoformat()}"}, page=10)
     closes = {_d(r["day"]): {t: v[0] for t, v in (r["bars"] or {}).items() if v and v[0] is not None} for r in pd_rows}
-    out = compute_report(cohorts, closes)
+    out = compute_report(cohorts, closes, boards=boards)
     if out:
-        store.upsert("report_card", out, "as_of,horizon")
+        try:
+            store.upsert("report_card", out, "as_of,horizon")
+        except Exception as e:  # new columns not created yet → keep the original report working
+            print(f"  report: new columns missing ({str(e)[:80]}); saving basic fields. Run the latest schema.sql.")
+            base = ("as_of", "horizon", "n", "avg_ret", "spy_ret", "excess", "hit_rate", "best", "best_ret", "worst", "worst_ret", "exit_day")
+            store.upsert("report_card", [{k: r[k] for k in base} for r in out], "as_of,horizon")
     print(f"  report: {len(cohorts)} cohorts, {len(out)} rows")
     return {"cohorts": len(cohorts), "rows": len(out)}
