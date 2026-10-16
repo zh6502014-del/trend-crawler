@@ -335,6 +335,11 @@ def compute_tw_scores(df: pd.DataFrame, max_main: int | None = None) -> pd.DataF
 
 def run_tw(store, today: dt.date | None = None) -> dict:
     stats: dict = {}
+    try:  # fail fast: do not spend 30 minutes fetching prices if the tables are not there
+        for t in ("tw_price_days", "tw_scores", "tw_signals", "tw_entities"):
+            store.select(t, {"select": "*", "limit": "1"})
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"Taiwan tables are missing or unreadable ({str(e)[:120]}). Run supabase/schema_tw.sql in the Supabase SQL Editor first.") from e
     hist = load_prices(store, today)
     if len(hist) < 60:
         raise RuntimeError(f"Only {len(hist)} Taiwan trading days of prices so far; need ≥60. Run again (it keeps what it fetched).")
