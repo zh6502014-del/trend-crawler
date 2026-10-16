@@ -28,19 +28,19 @@
    "ClosingPrice": "13.68",
    "Change": "0.0000",
    "Transaction": "4527"
-  },
-  {
-   "Date": "1151015",
-   "Code": "00402A",
-   "Name": "主動安聯美國科技",
-   "TradeVolume": "6276481",
-   "TradeValue": "61056939",
-   "OpeningPrice": "9.83",
-   "HighestPrice": "9.83",
-   "LowestPrice": "9.69",
-   "ClosingPrice": "9.73",
-   "Change": "-0.4100",
-   "Transaction": "1717"
   }
+ ],
+ "keys": [
+  "Date",
+  "Code",
+  "Name",
+  "TradeVolume",
+  "TradeValue",
+  "OpeningPrice",
+  "HighestPrice",
+  "LowestPrice",
+  "ClosingPrice",
+  "Change",
+  "Transaction"
  ]
 }
