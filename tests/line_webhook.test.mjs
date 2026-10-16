@@ -134,3 +134,13 @@ test("slow database → timeout reply (handle)", async () => {
   assert.ok(Date.now() - t0 < TIMEOUT_MS + 1500);
   assert.match(replies[0].messages[0].text, /超過 8 秒/);
 });
+
+test("parse: compare, paging, natural add/del", () => {
+  assert.equal(parseCommand("比較 NRXS ACOG").cmd, "compare");
+  assert.equal(parseCommand("nrxs vs acog").b, "ACOG");
+  assert.equal(parseCommand("榜單 2").page, 2);
+  assert.equal(parseCommand("榜單").page, 1);
+  assert.equal(parseCommand("把 NRXS 加入自選").cmd, "add");
+  assert.equal(parseCommand("把 NRXS 移出自選").cmd, "del");
+  assert.equal(parseCommand("NRXS 怎麼樣").cmd, "stock");
+});

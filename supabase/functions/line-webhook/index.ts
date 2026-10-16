@@ -57,7 +57,9 @@ export function parseCommand(raw) {
   const low = t.toLowerCase();
   if (/^(說明|help|\?|指令|選單)$/.test(low)) return { cmd: "help" };
   if (/^(設定選單|setup menu)$/.test(low)) return { cmd: "menu" };
-  if (/^(榜單|前十|top|top10|主榜)$/.test(low)) return { cmd: "top" };
+  const pg = low.match(/^(榜單|前十|top|top10|主榜)\s*(?:第)?\s*(\d{1,2})?\s*(?:頁)?$/);
+  if (pg) return { cmd: "top", page: Math.min(15, Math.max(1, Number(pg[2] || 1))) };
+  if (/^(下一頁|next|更多)$/.test(low)) return { cmd: "top", page: 2 };
   if (/^(自選|我的自選|watch|watchlist)$/.test(low)) return { cmd: "watch" };
   if (/^(大戶|內部人|smart)$/.test(low)) return { cmd: "smart" };
   let sm = t.match(/^(大戶|內部人|smart)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
@@ -82,8 +84,15 @@ export function parseCommand(raw) {
   if (m) return { cmd: "note", ticker: m[2].toUpperCase(), text: m[3].trim() };
   m = t.match(/^(產業|industry)\s*(.*)$/i);
   if (m) return { cmd: "industry", q: m[2].trim() };
-  m = t.match(/^(查|stock)?\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
-  if (m) return { cmd: "stock", ticker: m[2].toUpperCase(), raw: m[2] };
+  m = t.match(/^(?:比較|比|compare)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:和|跟|與|vs\.?|,|，|\s)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i)
+    || t.match(/^([A-Za-z][A-Za-z.\-]{0,5})\s*(?:vs\.?|比|對)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
+  if (m) return { cmd: "compare", a: m[1].toUpperCase(), b: m[2].toUpperCase() };
+  m = t.match(/^(?:把|將)?\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:加入?|新增)(?:到)?(?:我的)?自選(?:清單)?$/);
+  if (m) return { cmd: "add", ticker: m[1].toUpperCase() };
+  m = t.match(/^(?:把|將)?\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:移出|移除|刪除|刪掉|拿掉)(?:自選)?(?:清單)?$/);
+  if (m) return { cmd: "del", ticker: m[1].toUpperCase() };
+  m = t.match(/^(?:查|看|看看|stock)?\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:怎麼樣|如何|好嗎|呢|嗎|分數|卡片|[?？])?$/i);
+  if (m) return { cmd: "stock", ticker: m[1].toUpperCase(), raw: m[1] };
   return { cmd: "unknown", text: t };
 }
 
@@ -117,7 +126,7 @@ const dataLine = (asOf) => { const a = dataAge(asOf); return txt(a.label, { size
 
 export function deepLink(base, ticker) { return base ? base.replace(/\/?$/, "/") + "#t=" + encodeURIComponent(ticker) : ""; }
 
-export function stockCard(s, smart, dash) {
+export function stockCard(s, smart, dash, extra = {}) {
   const tags = (smart && smart.tags || []).map((t) => TAGS[t] || t);
   const flags = (s.flags || []).map((f) => FLAGS[f] || f);
   const delta = s.score_7d != null ? s.score - s.score_7d : null;
@@ -127,6 +136,7 @@ export function stockCard(s, smart, dash) {
       { type: "box", layout: "vertical", flex: 2, contents: [txt(num(s.score), { size: "xxl", weight: "bold", align: "end", color: "#eef1f8" }),
         txt(s.board === "main" ? "主榜 #" + s.rank : "觀察 #" + s.rank, { size: "xs", align: "end", color: "#8a93a6" })] },
     ] },
+    ...(extra.spark ? [extra.spark, txt(`近 ${extra.n} 日分數 ${num(extra.first, 0)} → ${num(s.score, 0)}`, { size: "xs", color: "#8a93a6" })] : []),
     ...(delta != null ? [txt("7 日分數 " + (delta >= 0 ? "+" : "") + num(delta), { size: "xs", color: delta >= 0 ? "#2fbf8f" : "#ee6a7b" })] : []),
     { type: "separator", margin: "md", color: "#2a3142" },
     bar("成長", s.growth, COLORS.growth), bar("驗證", s.validated, COLORS.validated),
@@ -134,12 +144,51 @@ export function stockCard(s, smart, dash) {
     { type: "separator", margin: "md", color: "#2a3142" },
     row("營收年增", pct(s.rev_yoy)), row("6 個月強度", pct(s.rs_6m)), row("市值", usd(s.mkt_cap)), row("日成交額", usd(s.dollar_vol)),
     row("產業", s.sector || "—"),
+    ...(extra.sectorRank ? [row("產業內排名", `第 ${extra.sectorRank[0]} / ${extra.sectorRank[1]}`)] : []),
     ...(tags.length ? [row("大戶", tags.join("、"), { color: "#2fbf8f", weight: "bold" })] : []),
     ...(flags.length ? [row("風險", flags.join("、"), { color: "#ee6a7b" })] : []),
     dataLine(s.as_of),
   ];
   const url = deepLink(dash, s.ticker);
   return flex(`${s.ticker} 分數 ${num(s.score)}`, bubble(body, url ? [link(url, "在儀表板開啟")] : null));
+}
+
+export const daysLeft = (d, now = Date.now()) => {
+  const n = Math.ceil((Date.parse(d) - now) / 86400000);
+  return isNaN(n) ? "" : n < 0 ? "（已截止）" : n === 0 ? "（今天）" : `（剩 ${n} 天）`;
+};
+
+// last N scores as a tiny bar sparkline (flex boxes, oldest → newest)
+export function sparkline(points) {
+  if (!points || points.length < 2) return null;
+  const v = points.map((p) => Number(p.score)), lo = Math.min(...v), hi = Math.max(...v), span = Math.max(hi - lo, 1);
+  const bars = v.map((x, i) => ({
+    type: "box", layout: "vertical", flex: 1, justifyContent: "flex-end", height: "34px", margin: i ? "2px" : "none",
+    contents: [{ type: "box", layout: "vertical", height: Math.round(6 + 28 * (x - lo) / span) + "px", backgroundColor: i === v.length - 1 ? "#4f6cf0" : "#3a4258", cornerRadius: "2px", contents: [{ type: "filler" }] }],
+  }));
+  return { type: "box", layout: "horizontal", margin: "sm", contents: bars };
+}
+
+const fmtCmp = (label, v) => (v == null ? "—" : label === "營收年增" || label === "6 個月強度" ? pct(v) : label === "市值" ? usd(v) : label === "排名" ? "#" + v : num(v, label === "分數" ? 1 : 0));
+export function compareCard(A, B) {
+  const line = (label, f, hi = true) => {
+    const a = f(A), b = f(B);
+    const win = a == null || b == null || a === b ? 0 : ((a > b) === hi ? 1 : 2);
+    return { type: "box", layout: "horizontal", margin: "sm", contents: [
+      txt(label, { color: "#8a93a6", flex: 3, size: "xs" }),
+      txt(fmtCmp(label, a), { flex: 3, align: "end", weight: win === 1 ? "bold" : "regular", color: win === 1 ? "#2fbf8f" : "#eef1f8" }),
+      txt(fmtCmp(label, b), { flex: 3, align: "end", weight: win === 2 ? "bold" : "regular", color: win === 2 ? "#2fbf8f" : "#eef1f8" }),
+    ] };
+  };
+  const body = [
+    { type: "box", layout: "horizontal", contents: [txt("", { flex: 3 }), txt(A.ticker, { flex: 3, align: "end", weight: "bold", size: "lg", color: "#eef1f8" }), txt(B.ticker, { flex: 3, align: "end", weight: "bold", size: "lg", color: "#eef1f8" })] },
+    { type: "separator", margin: "md", color: "#2a3142" },
+    line("分數", (r) => r.score), line("排名", (r) => (r.board === "main" ? r.rank : null), false),
+    line("成長", (r) => r.growth), line("驗證", (r) => r.validated), line("進場", (r) => r.accessibility), line("擁擠", (r) => r.attention, false),
+    line("營收年增", (r) => r.rev_yoy), line("6 個月強度", (r) => r.rs_6m), line("市值", (r) => r.mkt_cap, false),
+  ];
+  if (A.as_of) body.push(dataLine(A.as_of));
+  return flex(`${A.ticker} vs ${B.ticker}`, bubble(body));
 }
 
 export function topCard(rows, title) {
@@ -154,6 +203,8 @@ export function helpText() {
     "指令（回覆免費）",
     "NRXS　個股卡片（下方按鈕：加自選、設提醒、大戶）",
     "輝達／apple　用名稱或常見別名找股票",
+    "比較 NRXS ACOG　兩檔並排",
+    "榜單 2　翻到第 2 頁",
     "榜單　主榜前 10 名",
     "自選　自選股現況",
     "加 NRXS／刪 NRXS　改自選",
@@ -259,16 +310,33 @@ export async function run(cmd, db, ctx) {
         const found = cmd.noFallback ? null : await findByName(db, cmd.raw || cmd.ticker);
         return found || [{ type: "text", text: `找不到 ${cmd.ticker}。只有已評分的股票查得到。` }];
       }
-      const sm = await db.get(`smart_money?ticker=eq.${enc(cmd.ticker)}&limit=1`);
+      const [sm, hist] = await Promise.all([
+        db.get(`smart_money?ticker=eq.${enc(cmd.ticker)}&limit=1`),
+        db.get(`scores?ticker=eq.${enc(cmd.ticker)}&order=as_of.desc&limit=14&select=as_of,score`).catch(() => []),
+      ]);
+      const pts = hist.slice().reverse();
+      const extra = { spark: sparkline(pts), n: pts.length, first: pts[0] && pts[0].score };
+      if (rows[0].sector && rows[0].board === "main") {
+        const peers = await db.get(`latest_board?board=eq.main&sector=eq.${enc(rows[0].sector)}&select=ticker&order=score.desc&limit=200`).catch(() => []);
+        const i = peers.findIndex((r) => r.ticker === cmd.ticker);
+        if (i >= 0) extra.sectorRank = [i + 1, peers.length];
+      }
       let watching = null;
       try {
         const uid = await db.ownerId();
         watching = (await db.get(`user_watch?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`)).length > 0;
       } catch (_) { /* buttons still work without knowing the watch state */ }
       const t = cmd.ticker;
-      return withQuick([stockCard(rows[0], sm[0], dash)], [
+      return withQuick([stockCard(rows[0], sm[0], dash, extra)], [
         watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("大戶訊號", "大戶 " + t), qr("榜單", "榜單"),
       ]);
+    }
+    case "compare": {
+      if (cmd.a === cmd.b) return [{ type: "text", text: "請給兩檔不同的股票。" }];
+      const rows = await db.get(`latest_board?ticker=in.(${enc(cmd.a)},${enc(cmd.b)})`);
+      const A = rows.find((r) => r.ticker === cmd.a), B = rows.find((r) => r.ticker === cmd.b);
+      if (!A || !B) return [{ type: "text", text: `找不到 ${!A ? cmd.a : cmd.b}。` }];
+      return withQuick([compareCard(A, B)], [qr(cmd.a, cmd.a), qr(cmd.b, cmd.b), qr("榜單", "榜單")]);
     }
     case "alertmenu": {
       const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
@@ -281,8 +349,11 @@ export async function run(cmd, db, ctx) {
         opts.map((o) => qr(o, `提醒 ${t} ${o}`)));
     }
     case "top": {
-      const rows = await db.get("latest_board?board=eq.main&order=rank.asc&limit=10");
-      return withQuick([topCard(rows, "主榜前 10 名")], MAIN_QUICK);
+      const pg = cmd.page || 1, from = (pg - 1) * 10;
+      const rows = await db.get(`latest_board?board=eq.main&order=rank.asc&limit=10&offset=${from}`);
+      if (!rows.length) return withQuick([{ type: "text", text: "沒有更多了。" }], [qr("榜單", "榜單")]);
+      const more = rows.length === 10 && pg < 15 ? [qr("下一頁", "榜單 " + (pg + 1))] : [];
+      return withQuick([topCard(rows, pg === 1 ? "主榜前 10 名" : `主榜第 ${from + 1}–${from + rows.length} 名`)], [...more, ...MAIN_QUICK]);
     }
     case "watch": {
       const uid = await db.ownerId();
@@ -336,7 +407,7 @@ export async function run(cmd, db, ctx) {
     case "raise": {
       const rows = await db.get("fundraises?order=filed_at.desc&limit=6");
       if (!rows.length) return [{ type: "text", text: "還沒有 Reg CF 資料。" }];
-      const lines = rows.map((r) => `${r.issuer || r.cik}\n  申報 ${r.filed_at}　目標 ${usd(r.target_amount)}　上限 ${usd(r.max_amount)}${r.deadline ? "　截止 " + r.deadline : ""}`);
+      const lines = rows.map((r) => `${r.issuer || r.cik}\n  申報 ${r.filed_at}　目標 ${usd(r.target_amount)}　上限 ${usd(r.max_amount)}${r.deadline ? "　截止 " + r.deadline + daysLeft(r.deadline) : ""}`);
       return [{ type: "text", text: "最近的 Reg CF 募資：\n" + lines.join("\n") }];
     }
     case "report": {
