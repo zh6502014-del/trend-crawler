@@ -26,9 +26,10 @@ jobs:
           out = {"url": url, "http": code}
           try:
               raw = open(f"/tmp/{name}.raw", "rb").read()
-              data = json.loads(raw)
+              data = json.loads(raw.decode("utf-8", "replace"))
               out["count"] = len(data) if isinstance(data, list) else None
-              out["sample"] = data[:3] if isinstance(data, list) else data
+              out["sample"] = data[:2] if isinstance(data, list) else {k: (v if k != "data" else v[:2]) for k, v in data.items()} if isinstance(data, dict) else data
+              if isinstance(data, list) and data: out["keys"] = list(data[0].keys())
           except Exception as e:
               out["error"] = repr(e)
               out["head"] = open(f"/tmp/{name}.raw", "rb").read(300).decode("utf-8", "replace") if True else ""
@@ -41,8 +42,9 @@ jobs:
           probe tpex_daily     "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
           probe tpex_revenue   "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
           probe tpex_company   "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+          probe twse_hist      "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date=20261015&type=ALLBUT0999&response=json"
+          probe tpex_hist      "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?date=2026/10/15&type=EW&response=json"
           probe twse_pe        "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-          probe twse_inst      "https://openapi.twse.com.tw/v1/fund/T86"
       - name: Commit samples
         run: |
           git config user.name "github-actions[bot]"
