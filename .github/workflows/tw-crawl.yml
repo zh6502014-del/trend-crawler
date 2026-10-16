@@ -1,0 +1,47 @@
+name: tw-crawl
+
+# Taiwan market: TWSE closes 13:30 Taipei (05:30 UTC). Runs once a day after the close, weekdays.
+# The first run back-fills ~150 trading days of prices (about 20 minutes); later runs add one day.
+on:
+  schedule:
+    - cron: "40 7 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: tw-crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+      - name: Run Taiwan crawler
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python -m crawler.tw
+      - name: Open or update a failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh label create crawler-failure --color B60205 --description "Daily crawl failed" 2>/dev/null || true
+          existing=$(gh issue list --label crawler-failure --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Taiwan crawl failed again: $url"
+          else
+            gh issue create --title "Taiwan crawl failed" --label crawler-failure --body "Failed: $url"
+          fi
