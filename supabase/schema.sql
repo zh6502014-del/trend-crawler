@@ -239,3 +239,11 @@ drop policy if exists read_authenticated on public.fundraise_updates;
 create policy read_authenticated on public.fundraise_updates for select to authenticated using (true);
 grant select on public.fundraise_updates to authenticated;
 grant all on public.fundraise_updates to service_role;
+
+-- ── LINE alerts: "提醒 NRXS 分數>70". One-shot; the daily digest fires and disarms them. Only the owner's bot (service role) touches it. ──
+create table if not exists public.user_alerts (id bigint generated always as identity primary key, user_id uuid not null, ticker text not null, metric text not null check (metric in ('score','rank')), op text not null check (op in ('>','>=','<','<=')), value numeric not null, created_at timestamptz default now(), fired_at timestamptz);
+alter table public.user_alerts enable row level security;
+drop policy if exists own_rows on public.user_alerts;
+create policy own_rows on public.user_alerts for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+grant select, insert, update, delete on public.user_alerts to authenticated;
+grant all on public.user_alerts to service_role;

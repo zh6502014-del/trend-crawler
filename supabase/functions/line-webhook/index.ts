@@ -30,7 +30,13 @@ export function parseCommand(raw) {
   if (/^(大戶|內部人|smart)$/.test(low)) return { cmd: "smart" };
   if (/^(募資|regcf|reg cf)$/.test(low)) return { cmd: "raise" };
   if (/^(成績單|成績|report)$/.test(low)) return { cmd: "report" };
-  let m = t.match(/^(加|新增|add)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
+  if (/^(提醒清單|提醒列表|我的提醒|alerts)$/.test(low)) return { cmd: "alerts" };
+  if (/^(額度|用量|quota)$/.test(low)) return { cmd: "quota" };
+  let m = t.match(/^(刪提醒|刪除提醒|取消提醒)\s*([A-Za-z][A-Za-z.\-]{0,5})$/);
+  if (m) return { cmd: "delalert", ticker: m[2].toUpperCase() };
+  m = t.match(/^(提醒|alert)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(分數|排名|score|rank)\s*(>=|<=|>|<)\s*(\d+(?:\.\d+)?)$/i);
+  if (m) return { cmd: "alert", ticker: m[2].toUpperCase(), metric: /分數|score/i.test(m[3]) ? "score" : "rank", op: m[4], value: Number(m[5]) };
+  m = t.match(/^(加|新增|add)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
   if (m) return { cmd: "add", ticker: m[2].toUpperCase() };
   m = t.match(/^(刪|刪除|移除|del|remove)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
   if (m) return { cmd: "del", ticker: m[2].toUpperCase() };
@@ -110,6 +116,9 @@ export function helpText() {
     "加 NRXS／刪 NRXS　改自選",
     "筆記 NRXS 內容　寫筆記",
     "大戶　近期大戶訊號",
+    "提醒 NRXS 分數>70　設提醒（觸發一次，每日摘要一起送）",
+    "提醒清單／刪提醒 NRXS　管理提醒",
+    "額度　本月 LINE 推播用量",
     "產業 生技　該產業前 5 名",
     "募資　Reg CF 近況",
     "成績單　對 SPY 表現",
@@ -215,6 +224,27 @@ export async function run(cmd, db, ctx) {
       const lines = rows.map((r) => `${r.as_of}　${r.horizon} 日　平均 ${pct(r.avg_ret)}　SPY ${pct(r.spy_ret)}　超額 ${pct(r.excess)}　勝率 ${pct(r.hit_rate, false)}`);
       return [{ type: "text", text: "前 20 名之後的表現：\n" + lines.join("\n") }];
     }
+    case "alert": {
+      const uid = await db.ownerId();
+      const ex = await db.get(`entities?ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`);
+      if (!ex.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有設定。` }];
+      const mine = await db.get(`user_alerts?user_id=eq.${uid}&fired_at=is.null&select=id`);
+      if (mine.length >= 20) return [{ type: "text", text: "未觸發的提醒已達 20 則上限，先刪一些。" }];
+      await db.send("POST", "user_alerts", [{ user_id: uid, ticker: cmd.ticker, metric: cmd.metric, op: cmd.op, value: cmd.value }]);
+      return [{ type: "text", text: `已設定：${cmd.ticker} ${cmd.metric === "score" ? "分數" : "排名"}${cmd.op}${cmd.value}。條件成立時會放進下一次每日摘要，只通知一次。` }];
+    }
+    case "alerts": {
+      const uid = await db.ownerId();
+      const rows = await db.get(`user_alerts?user_id=eq.${uid}&order=created_at.asc&select=ticker,metric,op,value,fired_at`);
+      if (!rows.length) return [{ type: "text", text: "沒有提醒。例：提醒 NRXS 分數>70" }];
+      return [{ type: "text", text: "提醒：\n" + rows.map((r) => `${r.fired_at ? "✓已觸發" : "待觸發"}　${r.ticker} ${r.metric === "score" ? "分數" : "排名"}${r.op}${r.value}`).join("\n") }];
+    }
+    case "delalert": {
+      const uid = await db.ownerId();
+      await db.send("DELETE", `user_alerts?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}`);
+      return [{ type: "text", text: `已刪除 ${cmd.ticker} 的提醒。` }];
+    }
+    case "quota": return [{ type: "text", text: await ctx.quota() }];
     case "menu": return [{ type: "text", text: await ctx.setupMenu() }];
     default: return [{ type: "text", text: "看不懂「" + String(cmd.text || "").slice(0, 30) + "」。輸入「說明」看指令。" }];
   }
@@ -248,6 +278,16 @@ async function lineReply(fetchFn, replyToken, messages) {
     body: JSON.stringify({ replyToken, messages: messages.slice(0, 5) }),
   });
   if (!r.ok) console.error("reply failed", r.status, (await r.text()).slice(0, 300));
+}
+
+async function quotaText(fetchFn) {
+  const h = { Authorization: "Bearer " + env("LINE_CHANNEL_TOKEN") };
+  try {
+    const [q, u] = await Promise.all([fetchFn("https://api.line.me/v2/bot/message/quota", { headers: h }), fetchFn("https://api.line.me/v2/bot/message/quota/consumption", { headers: h })]);
+    if (!q.ok || !u.ok) return "查不到額度（" + q.status + "/" + u.status + "）。";
+    const qj = await q.json(), uj = await u.json();
+    return `本月推播用量：${uj.totalUsage} / ${qj.type === "limited" ? qj.value : "無上限（付費方案）"}\n回覆訊息不計入。每日摘要最多 1 則，自設上限 100 則。`;
+  } catch (e) { return "查額度失敗：" + String(e).slice(0, 80); }
 }
 
 async function setupMenu(fetchFn) {
@@ -285,7 +325,7 @@ export async function handle(req, fetchFn = fetch) {
       if (ev.type !== "message" || ev.message?.type !== "text") continue;
       if (!owner || ev.source?.userId !== owner) continue; // only the owner; everyone else is ignored silently
       if (!fresh(ev.webhookEventId)) continue;
-      const msgs = await run(parseCommand(ev.message.text), db, { setupMenu: () => setupMenu(fetchFn) });
+      const msgs = await run(parseCommand(ev.message.text), db, { setupMenu: () => setupMenu(fetchFn), quota: () => quotaText(fetchFn) });
       await lineReply(fetchFn, ev.replyToken, msgs);
     } catch (e) {
       console.error("event failed", String(e));

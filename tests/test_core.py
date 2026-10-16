@@ -613,3 +613,21 @@ def test_form_cu_real_shape_does_not_use_cost_of_goods_sold():
            b"<noOfSecurityOffered>9333</noOfSecurityOffered><price>1.05</price></offeringInformation>"
            b"<costGoodsSoldMostRecentFiscalYear>2386338</costGoodsSoldMostRecentFiscalYear></edgarSubmission>")
     assert formc.parse_form_cu(xml)["raised"] == 9995.64
+
+
+def test_digest_watchlist_and_alerts():
+    from crawler import digest
+    today = {"AAA": {"ticker": "AAA", "board": "main", "rank": 5, "score": 74.0}, "BBB": {"ticker": "BBB", "board": "watch", "rank": 90, "score": 50.0},
+             "CCC": {"ticker": "CCC", "board": "main", "rank": 3, "score": 61.0}}
+    prev = {"AAA": {"ticker": "AAA", "board": "main", "score": 66.0}, "BBB": {"ticker": "BBB", "board": "main", "score": 51.0},
+            "CCC": {"ticker": "CCC", "board": "main", "score": 60.0}}
+    lines = digest.watch_lines(["AAA", "BBB", "CCC", "ZZZ"], today, prev, {"CCC": {"score": 40, "tags": ["insider_buy"]}})
+    assert any(x.startswith("AAA") and "66→74" in x for x in lines)
+    assert any(x.startswith("BBB") and "掉出主榜" in x for x in lines)
+    assert any(x.startswith("CCC") and "內部人買進" in x for x in lines) and not any(x.startswith("ZZZ") for x in lines)
+    al = [{"id": 1, "ticker": "AAA", "metric": "score", "op": ">", "value": 70}, {"id": 2, "ticker": "AAA", "metric": "rank", "op": "<=", "value": 3},
+          {"id": 3, "ticker": "AAA", "metric": "score", "op": ">", "value": 70, "fired_at": "x"}, {"id": 4, "ticker": "NOPE", "metric": "score", "op": ">", "value": 1}]
+    assert [a["id"] for a in digest.check_alerts(al, today)] == [1]
+    fired = digest.check_alerts(al, today)
+    msg = digest.compose([], [], {}, [], "2026-10-14", digest.watch_lines(["AAA"], today, prev, {}), fired)
+    assert "你設的提醒：AAA 分數>70" in msg and "自選異動" in msg
