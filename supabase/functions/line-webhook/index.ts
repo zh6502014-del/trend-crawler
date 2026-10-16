@@ -32,6 +32,8 @@ export function parseCommand(raw) {
   if (/^(成績單|成績|report)$/.test(low)) return { cmd: "report" };
   if (/^(提醒清單|提醒列表|我的提醒|alerts)$/.test(low)) return { cmd: "alerts" };
   if (/^(額度|用量|quota)$/.test(low)) return { cmd: "quota" };
+  if (/^(今日|今天|today)$/.test(low)) return { cmd: "today" };
+  if (/^(週報|周報|本週|week|weekly)$/.test(low)) return { cmd: "week" };
   let m = t.match(/^(刪提醒|刪除提醒|取消提醒)\s*([A-Za-z][A-Za-z.\-]{0,5})$/);
   if (m) return { cmd: "delalert", ticker: m[2].toUpperCase() };
   m = t.match(/^(提醒|alert)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(分數|排名|score|rank)\s*(>=|<=|>|<)\s*(\d+(?:\.\d+)?)$/i);
@@ -119,6 +121,8 @@ export function helpText() {
     "提醒 NRXS 分數>70　設提醒（觸發一次，每日摘要一起送）",
     "提醒清單／刪提醒 NRXS　管理提醒",
     "額度　本月 LINE 推播用量",
+    "今日　與前一個交易日比的變化",
+    "週報　7 日分數漲跌與自選股",
     "產業 生技　該產業前 5 名",
     "募資　Reg CF 近況",
     "成績單　對 SPY 表現",
@@ -150,6 +154,43 @@ function makeDb(fetchFn) {
     return uid;
   };
   return { get, send, ownerId };
+}
+
+// ── pure summaries (exported for tests) ─────────────────────────────────────
+export function todaySummary(cur, prev, watchRows, smart, raises) {
+  const c = new Map(cur.map((r) => [r.ticker, r])), p = new Map(prev.map((r) => [r.ticker, r]));
+  const lines = [];
+  if (prev.length) {
+    const entered = cur.filter((r) => r.rank <= 20 && !(p.get(r.ticker) && p.get(r.ticker).rank <= 20)).sort((a, b) => a.rank - b.rank);
+    if (entered.length) lines.push("新進前 20 名：" + entered.slice(0, 8).map((r) => `${r.ticker}（第${r.rank}名）`).join("、"));
+    const left = prev.filter((r) => r.rank <= 20 && !(c.get(r.ticker) && c.get(r.ticker).rank <= 20)).map((r) => r.ticker);
+    if (left.length) lines.push("掉出前 20 名：" + left.slice(0, 8).join("、"));
+    const jumps = cur.filter((r) => p.get(r.ticker) && r.score - p.get(r.ticker).score >= 8).sort((a, b) => (b.score - p.get(b.ticker).score) - (a.score - p.get(a.ticker).score)).slice(0, 5);
+    if (jumps.length) lines.push("分數大幅上升：" + jumps.map((r) => `${r.ticker} +${(r.score - p.get(r.ticker).score).toFixed(0)}`).join("、"));
+  }
+  const big = cur.filter((r) => r.rank <= 20 && smart[r.ticker]).slice(0, 6);
+  if (big.length) lines.push("前 20 名的大戶動向：" + big.map((r) => `${r.ticker}（${(smart[r.ticker].tags || []).map((t) => TAGS[t] || t).join("/")}）`).join("、"));
+  const wl = [];
+  for (const r of watchRows.cur) {
+    const q = watchRows.prev.find((x) => x.ticker === r.ticker);
+    if (q && q.score != null && r.score != null && Math.abs(r.score - q.score) >= 5) wl.push(`${r.ticker} ${q.score.toFixed(0)}→${r.score.toFixed(0)}`);
+    else if (q && q.board !== r.board) wl.push(`${r.ticker} ${r.board === "main" ? "進入主榜" : "掉出主榜"}`);
+  }
+  if (wl.length) lines.push("自選異動：" + wl.join("、"));
+  if (raises.length) lines.push("新的 Reg CF 募資：" + raises.slice(0, 6).map((r) => r.issuer || "?").join("、"));
+  return lines;
+}
+
+export function weekSummary(rows, watch) {
+  const ch = rows.filter((r) => r.score_7d != null && r.score != null).map((r) => ({ ...r, d: r.score - r.score_7d }));
+  const up = [...ch].sort((a, b) => b.d - a.d).slice(0, 5), down = [...ch].sort((a, b) => a.d - b.d).slice(0, 3);
+  const f = (r) => `${r.ticker} ${r.d >= 0 ? "+" : ""}${r.d.toFixed(1)}（${num(r.score_7d, 0)}→${num(r.score, 0)}）`;
+  const lines = [];
+  if (up.length) lines.push("7 日漲最多：\n" + up.filter((r) => r.d > 0).map(f).join("\n"));
+  if (down.length) lines.push("7 日跌最多：\n" + down.filter((r) => r.d < 0).map(f).join("\n"));
+  const w = ch.filter((r) => watch.has(r.ticker)).sort((a, b) => b.d - a.d);
+  if (w.length) lines.push("自選 7 日：\n" + w.map(f).join("\n"));
+  return lines;
 }
 
 // ── command handlers → array of LINE message objects ────────────────────────
@@ -223,6 +264,35 @@ export async function run(cmd, db, ctx) {
       if (!rows.length) return [{ type: "text", text: "成績單還沒有資料，要累積 5 個交易日以上。" }];
       const lines = rows.map((r) => `${r.as_of}　${r.horizon} 日　平均 ${pct(r.avg_ret)}　SPY ${pct(r.spy_ret)}　超額 ${pct(r.excess)}　勝率 ${pct(r.hit_rate, false)}`);
       return [{ type: "text", text: "前 20 名之後的表現：\n" + lines.join("\n") }];
+    }
+    case "today": {
+      const dates = (await db.get("scores?board=eq.main&rank=eq.1&select=as_of&order=as_of.desc&limit=2")).map((r) => r.as_of);
+      if (!dates.length) return [{ type: "text", text: "還沒有評分資料。" }];
+      const cols = "ticker,board,rank,score";
+      const [cur, prev] = await Promise.all([
+        db.get(`scores?as_of=eq.${enc(dates[0])}&board=eq.main&select=${cols}&limit=1000`),
+        dates[1] ? db.get(`scores?as_of=eq.${enc(dates[1])}&board=eq.main&select=${cols}&limit=1000`) : Promise.resolve([]),
+      ]);
+      const uid = await db.ownerId();
+      const w = await db.get(`user_watch?user_id=eq.${uid}&select=ticker`);
+      let wr = { cur: [], prev: [] };
+      if (w.length) {
+        const list = w.map((x) => enc(x.ticker)).join(",");
+        wr = { cur: await db.get(`scores?as_of=eq.${enc(dates[0])}&ticker=in.(${list})&select=${cols}`),
+               prev: dates[1] ? await db.get(`scores?as_of=eq.${enc(dates[1])}&ticker=in.(${list})&select=${cols}`) : [] };
+      }
+      const sm = {}; (await db.get("smart_money?score=gt.0&select=ticker,tags&limit=500")).forEach((r) => { sm[r.ticker] = r; });
+      const since = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      const raises = await db.get(`fundraises?filed_at=gte.${since}&form_type=eq.C&select=issuer&limit=6`);
+      const lines = todaySummary(cur, prev, wr, sm, raises);
+      return [{ type: "text", text: `${String(dates[0]).slice(0, 10)}${dates[1] ? "（對比 " + String(dates[1]).slice(0, 10) + "）" : ""}\n` + (lines.length ? lines.join("\n") : "沒有明顯變化。") }];
+    }
+    case "week": {
+      const rows = await db.get("latest_board?board=eq.main&select=ticker,score,score_7d&limit=1000");
+      const uid = await db.ownerId();
+      const w = new Set((await db.get(`user_watch?user_id=eq.${uid}&select=ticker`)).map((x) => x.ticker));
+      const lines = weekSummary(rows, w);
+      return [{ type: "text", text: lines.length ? "週報（主榜 7 日分數變化）\n" + lines.join("\n\n") : "還沒有 7 日前的資料可以比。" }];
     }
     case "alert": {
       const uid = await db.ownerId();
