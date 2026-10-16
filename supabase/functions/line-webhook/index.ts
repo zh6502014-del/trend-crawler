@@ -18,6 +18,38 @@ export const usd = (n) => {
 export const pct = (n, sign = true) => (n == null || isNaN(n) ? "—" : (sign && n > 0 ? "+" : "") + (n * 100).toFixed(0) + "%");
 const num = (n, d = 1) => (n == null || isNaN(n) ? "—" : Number(n).toFixed(d));
 
+// ── data freshness: how many US trading days behind is the data? (weekdays only; holidays are not modelled) ──
+export function dataAge(asOf, now = new Date()) {
+  const m = String(asOf || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return { label: "資料日期未知", stale: true, lag: null };
+  const d0 = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  const ref = new Date(now.getTime() - 5 * 3600000); // roughly US Eastern
+  const d1 = Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate());
+  let lag = 0;
+  for (let t = d0 + 86400000; t <= d1; t += 86400000) { const w = new Date(t).getUTCDay(); if (w !== 0 && w !== 6) lag++; }
+  const day = `${m[1]}-${m[2]}-${m[3]}`;
+  return lag >= 2
+    ? { label: `資料截至 ${day}（已落後 ${lag} 個交易日，可能休市或爬蟲沒跑）`, stale: true, lag }
+    : { label: `資料截至 ${day}`, stale: false, lag };
+}
+
+// ── quick replies (buttons under the last message) ──
+const qr = (label, text) => ({ type: "action", action: { type: "message", label: String(label).slice(0, 20), text } });
+export const withQuick = (msgs, items) => {
+  if (!msgs.length || !items.length) return msgs;
+  const out = msgs.slice();
+  out[out.length - 1] = { ...out[out.length - 1], quickReply: { items: items.slice(0, 13) } };
+  return out;
+};
+const MAIN_QUICK = [qr("榜單", "榜單"), qr("自選", "自選"), qr("今日", "今日"), qr("週報", "週報"), qr("大戶", "大戶")];
+
+// ── name / alias lookup (stock names in the DB are mostly English; common Chinese names go here) ──
+export const ALIASES = {
+  "輝達": "NVDA", "英偉達": "NVDA", "特斯拉": "TSLA", "蘋果": "AAPL", "微軟": "MSFT", "谷歌": "GOOGL", "亞馬遜": "AMZN",
+  "超微": "AMD", "英特爾": "INTC", "網飛": "NFLX", "帕蘭泰爾": "PLTR", "台積電": "TSM", "美光": "MU", "高通": "QCOM",
+};
+export const cleanQuery = (q) => String(q || "").normalize("NFKC").replace(/[*%,()\\]/g, "").trim().slice(0, 30);
+
 // ── command parsing ─────────────────────────────────────────────────────────
 export function parseCommand(raw) {
   let t = String(raw || "").normalize("NFKC").trim();
@@ -28,6 +60,8 @@ export function parseCommand(raw) {
   if (/^(榜單|前十|top|top10|主榜)$/.test(low)) return { cmd: "top" };
   if (/^(自選|我的自選|watch|watchlist)$/.test(low)) return { cmd: "watch" };
   if (/^(大戶|內部人|smart)$/.test(low)) return { cmd: "smart" };
+  let sm = t.match(/^(大戶|內部人|smart)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
+  if (sm) return { cmd: "smart", ticker: sm[2].toUpperCase() };
   if (/^(募資|regcf|reg cf)$/.test(low)) return { cmd: "raise" };
   if (/^(成績單|成績|report)$/.test(low)) return { cmd: "report" };
   if (/^(提醒清單|提醒列表|我的提醒|alerts)$/.test(low)) return { cmd: "alerts" };
@@ -38,6 +72,8 @@ export function parseCommand(raw) {
   if (m) return { cmd: "delalert", ticker: m[2].toUpperCase() };
   m = t.match(/^(提醒|alert)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(分數|排名|score|rank)\s*(>=|<=|>|<)\s*(\d+(?:\.\d+)?)$/i);
   if (m) return { cmd: "alert", ticker: m[2].toUpperCase(), metric: /分數|score/i.test(m[3]) ? "score" : "rank", op: m[4], value: Number(m[5]) };
+  m = t.match(/^(提醒|alert)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
+  if (m) return { cmd: "alertmenu", ticker: m[2].toUpperCase() };
   m = t.match(/^(加|新增|add)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
   if (m) return { cmd: "add", ticker: m[2].toUpperCase() };
   m = t.match(/^(刪|刪除|移除|del|remove)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
@@ -47,7 +83,7 @@ export function parseCommand(raw) {
   m = t.match(/^(產業|industry)\s*(.*)$/i);
   if (m) return { cmd: "industry", q: m[2].trim() };
   m = t.match(/^(查|stock)?\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
-  if (m) return { cmd: "stock", ticker: m[2].toUpperCase() };
+  if (m) return { cmd: "stock", ticker: m[2].toUpperCase(), raw: m[2] };
   return { cmd: "unknown", text: t };
 }
 
@@ -77,6 +113,8 @@ const tapRow = (left, mid, right, tapText) => ({
   contents: [txt(left, { flex: 1, color: "#8a93a6", size: "xs" }), txt(mid, { flex: 4, weight: "bold", color: "#eef1f8" }), txt(right, { flex: 2, align: "end", color: "#eef1f8" })],
 });
 
+const dataLine = (asOf) => { const a = dataAge(asOf); return txt(a.label, { size: "xs", color: a.stale ? "#ee6a7b" : "#8a93a6", margin: "md" }); };
+
 export function deepLink(base, ticker) { return base ? base.replace(/\/?$/, "/") + "#t=" + encodeURIComponent(ticker) : ""; }
 
 export function stockCard(s, smart, dash) {
@@ -98,6 +136,7 @@ export function stockCard(s, smart, dash) {
     row("產業", s.sector || "—"),
     ...(tags.length ? [row("大戶", tags.join("、"), { color: "#2fbf8f", weight: "bold" })] : []),
     ...(flags.length ? [row("風險", flags.join("、"), { color: "#ee6a7b" })] : []),
+    dataLine(s.as_of),
   ];
   const url = deepLink(dash, s.ticker);
   return flex(`${s.ticker} 分數 ${num(s.score)}`, bubble(body, url ? [link(url, "在儀表板開啟")] : null));
@@ -106,18 +145,21 @@ export function stockCard(s, smart, dash) {
 export function topCard(rows, title) {
   const body = [txt(title, { size: "md", weight: "bold", color: "#eef1f8" }), txt("點一列看詳細", { size: "xs", color: "#8a93a6" })];
   rows.forEach((r) => body.push(tapRow("#" + r.rank, r.ticker + "  " + (r.name || "").slice(0, 16), num(r.score), r.ticker)));
+  if (rows[0] && rows[0].as_of) body.push(dataLine(rows[0].as_of));
   return flex(title, bubble(body));
 }
 
 export function helpText() {
   return [
     "指令（回覆免費）",
-    "NRXS　個股卡片",
+    "NRXS　個股卡片（下方按鈕：加自選、設提醒、大戶）",
+    "輝達／apple　用名稱或常見別名找股票",
     "榜單　主榜前 10 名",
     "自選　自選股現況",
     "加 NRXS／刪 NRXS　改自選",
     "筆記 NRXS 內容　寫筆記",
-    "大戶　近期大戶訊號",
+    "大戶　近期大戶訊號；大戶 NRXS 看單一個股",
+    "提醒 NRXS　列出建議條件按鈕",
     "提醒 NRXS 分數>70　設提醒（觸發一次，每日摘要一起送）",
     "提醒清單／刪提醒 NRXS　管理提醒",
     "額度　本月 LINE 推播用量",
@@ -134,13 +176,14 @@ export function helpText() {
 function makeDb(fetchFn) {
   const base = env("SUPABASE_URL").replace(/\/$/, ""), key = env("SUPABASE_SERVICE_ROLE_KEY");
   const h = { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json" };
+  const sig = () => (typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(7500) } : {});
   const get = async (path) => {
-    const r = await fetchFn(base + "/rest/v1/" + path, { headers: h });
+    const r = await fetchFn(base + "/rest/v1/" + path, { headers: h, ...sig() });
     if (!r.ok) throw new Error("db " + r.status + " " + (await r.text()).slice(0, 200));
     return r.json();
   };
   const send = async (method, path, body, prefer) => {
-    const r = await fetchFn(base + "/rest/v1/" + path, { method, headers: { ...h, Prefer: prefer || "return=minimal" }, body: body ? JSON.stringify(body) : undefined });
+    const r = await fetchFn(base + "/rest/v1/" + path, { method, headers: { ...h, Prefer: prefer || "return=minimal" }, body: body ? JSON.stringify(body) : undefined, ...sig() });
     if (!r.ok) throw new Error("db " + r.status + " " + (await r.text()).slice(0, 200));
   };
   let uid = env("OWNER_UID") || null;
@@ -193,21 +236,53 @@ export function weekSummary(rows, watch) {
   return lines;
 }
 
+// name search: alias table first, then company-name substring; returns messages, or null when nothing matches
+export async function findByName(db, q) {
+  const key = cleanQuery(q).toLowerCase();
+  if (key.length < 2) return null;
+  if (ALIASES[key]) return run({ cmd: "stock", ticker: ALIASES[key], noFallback: true }, db, {});
+  const rows = await db.get(`latest_board?name=ilike.*${encodeURIComponent(key)}*&order=rank.asc&limit=5`);
+  if (!rows.length) return null;
+  if (rows.length === 1) return run({ cmd: "stock", ticker: rows[0].ticker, noFallback: true }, db, {});
+  return withQuick([topCard(rows, `「${key}」符合 ${rows.length} 檔`)], rows.map((r) => qr(r.ticker, r.ticker)));
+}
+
 // ── command handlers → array of LINE message objects ────────────────────────
 export async function run(cmd, db, ctx) {
   const dash = env("DASHBOARD_URL");
   const enc = encodeURIComponent;
   switch (cmd.cmd) {
-    case "help": return [{ type: "text", text: helpText() }];
+    case "help": return withQuick([{ type: "text", text: helpText() }], MAIN_QUICK);
     case "stock": {
       const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
-      if (!rows.length) return [{ type: "text", text: `找不到 ${cmd.ticker}。只有已評分的股票查得到。` }];
+      if (!rows.length) {
+        const found = cmd.noFallback ? null : await findByName(db, cmd.raw || cmd.ticker);
+        return found || [{ type: "text", text: `找不到 ${cmd.ticker}。只有已評分的股票查得到。` }];
+      }
       const sm = await db.get(`smart_money?ticker=eq.${enc(cmd.ticker)}&limit=1`);
-      return [stockCard(rows[0], sm[0], dash)];
+      let watching = null;
+      try {
+        const uid = await db.ownerId();
+        watching = (await db.get(`user_watch?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`)).length > 0;
+      } catch (_) { /* buttons still work without knowing the watch state */ }
+      const t = cmd.ticker;
+      return withQuick([stockCard(rows[0], sm[0], dash)], [
+        watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("大戶訊號", "大戶 " + t), qr("榜單", "榜單"),
+      ]);
+    }
+    case "alertmenu": {
+      const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
+      if (!rows.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有可設定的條件。` }];
+      const r = rows[0], t = cmd.ticker, sc = Math.round(r.score);
+      const opts = [`分數>${sc + 5}`, `分數>${sc + 10}`, `分數<${Math.max(0, sc - 5)}`];
+      if (r.rank > 10) opts.push("排名<=10");
+      if (r.rank > 20) opts.push("排名<=20");
+      return withQuick([{ type: "text", text: `${t} 目前分數 ${num(r.score)}、${r.board === "main" ? "主榜" : "觀察"}第 ${r.rank} 名。\n點下方條件，或自己輸入，例如：提醒 ${t} 分數>${sc + 5}` }],
+        opts.map((o) => qr(o, `提醒 ${t} ${o}`)));
     }
     case "top": {
       const rows = await db.get("latest_board?board=eq.main&order=rank.asc&limit=10");
-      return [topCard(rows, "主榜前 10 名 · " + (rows[0] ? rows[0].as_of : ""))];
+      return withQuick([topCard(rows, "主榜前 10 名")], MAIN_QUICK);
     }
     case "watch": {
       const uid = await db.ownerId();
@@ -235,6 +310,11 @@ export async function run(cmd, db, ctx) {
       return [{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }];
     }
     case "smart": {
+      if (cmd.ticker) {
+        const one = await db.get(`smart_money?ticker=eq.${enc(cmd.ticker)}&limit=1`);
+        if (!one.length || !(one[0].tags || []).length) return withQuick([{ type: "text", text: `${cmd.ticker} 目前沒有大戶訊號。` }], [qr(cmd.ticker, cmd.ticker)]);
+        return withQuick([{ type: "text", text: `${cmd.ticker} 大戶訊號（參考線索，不計入分數）\n` + one[0].tags.map((x) => TAGS[x] || x).join("、") + `\n訊號分數 ${num(one[0].score, 0)}` }], [qr(cmd.ticker, cmd.ticker)]);
+      }
       const rows = await db.get("smart_money?score=gt.0&order=score.desc&limit=10");
       if (!rows.length) return [{ type: "text", text: "目前沒有大戶訊號。" }];
       const body = [txt("大戶訊號（參考線索，不計入分數）", { weight: "bold", color: "#eef1f8" })];
@@ -285,14 +365,15 @@ export async function run(cmd, db, ctx) {
       const since = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
       const raises = await db.get(`fundraises?filed_at=gte.${since}&form_type=eq.C&select=issuer&limit=6`);
       const lines = todaySummary(cur, prev, wr, sm, raises);
-      return [{ type: "text", text: `${String(dates[0]).slice(0, 10)}${dates[1] ? "（對比 " + String(dates[1]).slice(0, 10) + "）" : ""}\n` + (lines.length ? lines.join("\n") : "沒有明顯變化。") }];
+      return withQuick([{ type: "text", text: `${dataAge(dates[0]).label}${dates[1] ? "（對比 " + String(dates[1]).slice(0, 10) + "）" : ""}\n` + (lines.length ? lines.join("\n") : "沒有明顯變化。") }], [qr("週報", "週報"), qr("自選", "自選"), qr("榜單", "榜單")]);
     }
     case "week": {
-      const rows = await db.get("latest_board?board=eq.main&select=ticker,score,score_7d&limit=1000");
+      const rows = await db.get("latest_board?board=eq.main&select=ticker,score,score_7d,as_of&limit=1000");
       const uid = await db.ownerId();
       const w = new Set((await db.get(`user_watch?user_id=eq.${uid}&select=ticker`)).map((x) => x.ticker));
       const lines = weekSummary(rows, w);
-      return [{ type: "text", text: lines.length ? "週報（主榜 7 日分數變化）\n" + lines.join("\n\n") : "還沒有 7 日前的資料可以比。" }];
+      const age = dataAge(rows[0] && rows[0].as_of).label;
+      return withQuick([{ type: "text", text: lines.length ? "週報（主榜 7 日分數變化）\n" + age + "\n\n" + lines.join("\n\n") : "還沒有 7 日前的資料可以比。" }], [qr("今日", "今日"), qr("自選", "自選"), qr("榜單", "榜單")]);
     }
     case "alert": {
       const uid = await db.ownerId();
@@ -316,7 +397,10 @@ export async function run(cmd, db, ctx) {
     }
     case "quota": return [{ type: "text", text: await ctx.quota() }];
     case "menu": return [{ type: "text", text: await ctx.setupMenu() }];
-    default: return [{ type: "text", text: "看不懂「" + String(cmd.text || "").slice(0, 30) + "」。輸入「說明」看指令。" }];
+    default: {
+      const found = cmd.cmd === "unknown" ? await findByName(db, cmd.text) : null;
+      return found || [{ type: "text", text: "看不懂「" + String(cmd.text || "").slice(0, 30) + "」。輸入「說明」看指令。" }];
+    }
   }
 }
 
@@ -330,6 +414,19 @@ export async function verifySignature(body, signature, secret) {
   if (expect.length !== signature.length) return false;
   let diff = 0; for (let i = 0; i < expect.length; i++) diff |= expect.charCodeAt(i) ^ signature.charCodeAt(i);
   return diff === 0;
+}
+
+export const TIMEOUT_MS = 8000; // reply tokens last ~1 minute; answer within 8s or say so
+const TIMEOUT = Symbol("timeout");
+const WRITE_CMDS = new Set(["add", "del", "note", "alert", "delalert", "menu"]);
+export const timeoutText = (cmd) => WRITE_CMDS.has(cmd.cmd)
+  ? "資料庫回應太慢（超過 8 秒）。這個操作可能已完成，請用「自選」或「提醒清單」確認。"
+  : "資料庫回應太慢（超過 8 秒），可能剛從休眠醒來。請再輸入一次。";
+function withTimeout(p, ms) {
+  p.catch(() => {}); // a late failure after the timeout must not become an unhandled rejection
+  let t;
+  const to = new Promise((res) => { t = setTimeout(() => res(TIMEOUT), ms); });
+  return Promise.race([p, to]).finally(() => clearTimeout(t));
 }
 
 const seen = new Map(); // webhookEventId -> time; only guards redelivery inside one warm instance
@@ -395,8 +492,9 @@ export async function handle(req, fetchFn = fetch) {
       if (ev.type !== "message" || ev.message?.type !== "text") continue;
       if (!owner || ev.source?.userId !== owner) continue; // only the owner; everyone else is ignored silently
       if (!fresh(ev.webhookEventId)) continue;
-      const msgs = await run(parseCommand(ev.message.text), db, { setupMenu: () => setupMenu(fetchFn), quota: () => quotaText(fetchFn) });
-      await lineReply(fetchFn, ev.replyToken, msgs);
+      const cmd = parseCommand(ev.message.text);
+      const out = await withTimeout(run(cmd, db, { setupMenu: () => setupMenu(fetchFn), quota: () => quotaText(fetchFn) }), TIMEOUT_MS);
+      await lineReply(fetchFn, ev.replyToken, out === TIMEOUT ? [{ type: "text", text: timeoutText(cmd) }] : out);
     } catch (e) {
       console.error("event failed", String(e));
       try { await lineReply(fetchFn, ev.replyToken, [{ type: "text", text: "查詢失敗，稍後再試。" }]); } catch (_) { /* ignore */ }
