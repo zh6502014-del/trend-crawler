@@ -1,0 +1,6 @@
+{
+ "url": "https://openapi.twse.com.tw/v1/fund/T86",
+ "http": "200",
+ "error": "JSONDecodeError('Expecting value: line 1 column 1 (char 0)')",
+ "head": "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<head>\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta name=\"keywords\" content=\"\" />\n<meta name=\"descripti"
+}

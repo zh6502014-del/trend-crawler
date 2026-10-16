@@ -1,0 +1,31 @@
+{
+ "url": "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL",
+ "http": "200",
+ "count": 1081,
+ "sample": [
+  {
+   "Date": "1151015",
+   "Code": "1101",
+   "Name": "台泥",
+   "PEratio": "",
+   "DividendYield": "2.99",
+   "PBratio": "0.87"
+  },
+  {
+   "Date": "1151015",
+   "Code": "1102",
+   "Name": "亞泥",
+   "PEratio": "10.46",
+   "DividendYield": "6.08",
+   "PBratio": "0.73"
+  },
+  {
+   "Date": "1151015",
+   "Code": "1103",
+   "Name": "嘉泥",
+   "PEratio": "9.89",
+   "DividendYield": "3.92",
+   "PBratio": "0.50"
+  }
+ ]
+}
