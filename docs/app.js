@@ -48,13 +48,16 @@
     thin_volume: { label: '成交薄', tone: 'warn', help: '日均成交額偏低，小額也可能買貴、賣不掉。' },
     micro_cap: { label: '市值極小', tone: 'warn', help: '市值很小，價格波動與資訊落差都會放大。' },
     crowded: { label: '已擁擠', tone: '', help: 'Hacker News 提及與成交額都偏高，已經有不少人注意到，資訊落差變小。' },
+    inst_buy: { label: '法人買超', tone: 'ok', help: '近 20 日三大法人（外資、投信、自營商）合計買超，占同期成交量 5% 以上，而且最近 5 日仍在買。' },
+    high_pledge: { label: '董監設質高', tone: 'warn', help: '董事與監察人持股中，已質押的比例達 30% 以上；股價下跌時可能被迫補繳或賣股。' },
+    insider_selling: { label: '內部人申報轉讓', tone: 'warn', help: '內部人申報預定轉讓（可能是賣出、贈與或信託），股數達已發行股數 0.2% 以上。' },
     data_thin: { label: '資料不足', tone: '', help: '季度財報不足四季或缺毛利率（金融業看淨利率），這個分數可信度較低。' },
   };
   const RISK = new Set(['short_runway', 'deep_loss', 'high_debt', 'dilution']);
 
   const state = {
     sb: null, started: false, rows: [], raises: [], run: null,
-    watch: new Map(), tab: 'main', tq: '', tsector: '', tmin: 0, tgrow: false, ttpex: false, reportLoaded: {}, q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
+    watch: new Map(), tab: 'main', tq: '', tsector: '', tmin: 0, tgrow: false, ttpex: false, tinst: false, reportLoaded: {}, q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
     maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, watchOnly: false, portal: '', soon: false, view: 'all', saved: [],
     stockTable: null, raiseTable: null, stockReady: false, raiseReady: false,
     charts: [], current: null, lastFocus: null,
@@ -317,6 +320,7 @@
     $('#t-sector').addEventListener('change', (e) => { state.tsector = e.target.value; applyTwFilters(); });
     $('#t-min').addEventListener('input', (e) => { state.tmin = +e.target.value; $('#t-min-out').textContent = e.target.value; applyTwFilters(); });
     $('#t-grow').addEventListener('change', (e) => { state.tgrow = e.target.checked; applyTwFilters(); });
+    $('#t-inst').addEventListener('change', (e) => { state.tinst = e.target.checked; applyTwFilters(); });
     $('#t-tpex').addEventListener('change', (e) => { state.ttpex = e.target.checked; applyTwFilters(); });
     wireViews();
     $('#r-portal').addEventListener('change', (e) => { state.portal = e.target.value; applyFilters(); });
@@ -618,6 +622,9 @@
         { title: '6 個月強度', field: 'rs_6m', width: 136, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 3,
           headerTooltip: '6 個月報酬減去加權指數的 6 個月報酬',
           formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue())}</span>` },
+        { title: '法人 20 日', field: 'inst_20d', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 3,
+          headerTooltip: '近 20 日三大法人合計買賣超，占同期成交量的比例；正數是買超',
+          formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue(), 1)}</span>` },
         { title: '市值', field: 'mkt_cap', width: 120, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4, formatter: (c) => twd(c.getValue()) },
         { title: '日成交值', field: 'dollar_vol', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
           headerTooltip: '20 日平均成交值', formatter: (c) => twd(c.getValue()) },
@@ -651,6 +658,16 @@
       ${pillar(1, '驗證', d.validated, `單月營收年增 ${spct(d.rev_yoy)}，累計營收年增 ${spct(d.rev_cum_yoy)}。台股沒有毛利率資料，這一項是簡化版。`)}
       ${pillar(2, '進場', d.accessibility, `市值 ${twd(d.mkt_cap)}，20 日平均成交值 ${twd(d.dollar_vol)}，股價 NT$${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `只看 20 日平均成交值 ${twd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。` : '')}
+      <div class="d-section"><h3>法人與內部人</h3>
+        <dl class="facts">
+          <div><dt>三大法人 5 日</dt><dd class="${tone(d.inst_5d)}">${spct(d.inst_5d, 1)}</dd></div>
+          <div><dt>三大法人 20 日</dt><dd class="${tone(d.inst_20d)}">${spct(d.inst_20d, 1)}</dd></div>
+          <div><dt>外資 20 日</dt><dd class="${tone(d.foreign_20d)}">${spct(d.foreign_20d, 1)}</dd></div>
+          <div><dt>投信 20 日</dt><dd class="${tone(d.trust_20d)}">${spct(d.trust_20d, 1)}</dd></div>
+          <div><dt>董監設質比例</dt><dd>${isNum(d.pledge_ratio) ? spct(d.pledge_ratio, 0).replace('+', '') : '—'}</dd></div>
+        </dl>
+        <p class="chart-note">法人欄位是買賣超股數除以同期成交股數，正數代表買超，只是參考線索，不計入分數。</p>
+      </div>
       <div class="d-section"><h3>風險標記</h3>${f.length
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
         : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
@@ -678,6 +695,7 @@
       (!state.tsector || d.sector === state.tsector) &&
       (d.score ?? 0) >= state.tmin &&
       (!state.tgrow || (d.rev_yoy ?? -1) >= 0.3) &&
+      (!state.tinst || (d.flags || []).includes('inst_buy')) &&
       (!state.ttpex || d.exchange === 'TPEx'));
     const total = (state.tw || []).filter((r) => r.board === state.twBoard).length;
     $('#count').textContent = `顯示 ${state.twTable.getDataCount('active')} 檔，共 ${total} 檔`;
@@ -782,7 +800,12 @@
     const m = /(?:^|[#&])t=([A-Za-z0-9.\-]{1,8})/.exec(location.hash || '') || /(?:^|[?&])t=([A-Za-z0-9.\-]{1,8})/.exec(location.search || '');
     if (!m || state.linkDone) return;
     state.linkDone = true;
-    const d = (state.rows || []).find((r) => r.ticker === m[1].toUpperCase());
+    const t = m[1].toUpperCase();
+    let d = (state.rows || []).find((r) => r.ticker === t);
+    if (!d && /^\d/.test(t)) { // Taiwan code: switch the market first, then open it
+      d = (state.tw || []).find((r) => r.ticker === t);
+      if (d) setMarket('tw');
+    }
     if (d) openStock(d);
   }
 

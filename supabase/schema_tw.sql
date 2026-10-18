@@ -59,3 +59,33 @@ drop policy if exists read_authenticated on public.tw_report_card;
 create policy read_authenticated on public.tw_report_card for select to authenticated using (true);
 grant select on public.tw_report_card to authenticated;
 grant all on public.tw_report_card to service_role;
+
+
+-- Big-money signals (institutional flows, director pledging). Run after the section above; safe to re-run.
+create table if not exists public.tw_inst_days (day date primary key, bars jsonb not null);
+alter table public.tw_inst_days enable row level security;
+grant all on public.tw_inst_days to service_role;
+alter table public.tw_signals add column if not exists inst_5d numeric;
+alter table public.tw_signals add column if not exists inst_20d numeric;
+alter table public.tw_signals add column if not exists foreign_20d numeric;
+alter table public.tw_signals add column if not exists trust_20d numeric;
+alter table public.tw_signals add column if not exists pledge_ratio numeric;
+
+create or replace view public.tw_latest_board with (security_invoker = true) as
+select
+  s.as_of, s.ticker, e.name, e.sector, e.exchange,
+  s.board, s.rank, s.score, s.growth, s.validated, s.accessibility, s.attention, s.flags,
+  g.price, g.mkt_cap, g.dollar_vol, g.ret_1m, g.ret_3m, g.ret_6m, g.rs_6m, g.dist_high,
+  g.rev_yoy, g.rev_cum_yoy, g.rev_streak, g.ym,
+  prev.score as score_7d, prev.rank as rank_7d,
+  g.inst_5d, g.inst_20d, g.foreign_20d, g.trust_20d, g.pledge_ratio
+from public.tw_scores s
+join public.tw_entities e on e.ticker = s.ticker
+left join public.tw_signals g on g.ticker = s.ticker and g.as_of = s.as_of
+left join lateral (
+  select p.score, p.rank from public.tw_scores p
+  where p.ticker = s.ticker and p.as_of <= s.as_of - 7
+  order by p.as_of desc limit 1
+) prev on true
+where s.as_of = (select max(as_of) from public.tw_scores);
+grant select on public.tw_latest_board to authenticated;

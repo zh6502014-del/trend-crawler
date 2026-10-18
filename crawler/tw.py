@@ -37,6 +37,7 @@ TPEX_CO = ["https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"]
 INDEX_NAME = "發行量加權股價指數"
 BENCH = "_TAIEX"
 HISTORY_DAYS = 215
+INST_COLS = ("inst_5d", "inst_20d", "foreign_20d", "trust_20d", "pledge_ratio")
 PAUSE = 3.2           # TWSE throttles to roughly 3 requests per 5 seconds
 UA = {"User-Agent": "Mozilla/5.0 (trend-crawler personal research)", "Accept": "application/json"}
 CODE_OK = re.compile(r"^[1-9]\d{3}$")   # ordinary stocks: 4 digits (ETFs 00xx..., warrants 6 digits, etc. are excluded)
@@ -355,6 +356,8 @@ def run_tw(store, today: dt.date | None = None) -> dict:
     if df.empty:
         raise RuntimeError("Nothing scorable in Taiwan after joining prices and revenue.")
     scored = compute_tw_scores(df)
+    from . import tw_inst  # big-money signals: institutional flows, pledging, insider filings (never fatal)
+    scored = tw_inst.enrich(store, scored, hist)
     stats["main"] = int((scored["board"] == "tw_main").sum())
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     store.upsert("tw_entities", [
@@ -363,7 +366,8 @@ def run_tw(store, today: dt.date | None = None) -> dict:
         for t, r in scored.iterrows()], "ticker")
     cols = ["price", "mkt_cap", "dollar_vol", "ret_1m", "ret_3m", "ret_6m", "rs_6m", "dist_high", "rev_yoy", "rev_streak", "shares_out"]
     store.upsert("tw_signals", [{"ticker": t, "as_of": as_of, "ym": r.get("ym"), "rev_cum_yoy": r.get("rev_cum_yoy"),
-                                 **{c: (int(r[c]) if c == "rev_streak" and pd.notna(r[c]) else r.get(c)) for c in cols}}
+                                 **{c: (int(r[c]) if c == "rev_streak" and pd.notna(r[c]) else r.get(c)) for c in cols},
+                                 **{c: r.get(c) for c in INST_COLS if c in scored.columns}}
                                 for t, r in scored.iterrows()], "ticker,as_of")
     store.upsert("tw_scores", [
         {"ticker": t, "as_of": as_of, "board": r["board"], "rank": int(r["rank"]), "score": r["score"],

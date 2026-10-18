@@ -108,6 +108,8 @@ def test_run_tw_writes_tables(monkeypatch):
     rev = pd.DataFrame({"name": codes, "exchange": "TPEx", "sector": "x", "ym": "11509", "rev_month": 1e6,
                         "rev_yoy": rng.normal(0.1, 0.3, len(codes)), "rev_cum_yoy": 0.05}, index=codes)
     monkeypatch.setattr(tw, "load_fundamentals", lambda session=None: (rev, {}, {}))
+    from crawler import tw_inst
+    monkeypatch.setattr(tw_inst, "enrich", lambda store, scored, hist, session=None: scored)  # no network in tests
     st = MemoryStore()
     stats = tw.run_tw(st)
     assert stats["scorable"] == 60
@@ -123,3 +125,29 @@ def test_report_uses_taiex_benchmark():
     out = compute_report(cohorts, closes, horizons=(1,), boards={d0: [str(i) for i in range(30)]}, bench="_TAIEX")
     assert len(out) == 1 and out[0]["spy_ret"] == 0.1 and out[0]["avg_ret"] == 0.2 and out[0]["excess"] == 0.1
     assert compute_report(cohorts, closes, horizons=(1,)) == []  # default benchmark SPY is absent
+
+
+def test_institutional_parsers_and_flags():
+    from crawler import tw_inst
+    t86 = {"stat": "OK", "fields": ["證券代號", "證券名稱", "外陸資買賣超股數(不含外資自營商)", "外資自營商買賣超股數", "投信買賣超股數", "三大法人買賣超股數"],
+           "data": [["2330", "台積電", "1,000", "-200", "300", "1,100"], ["00919", "ETF", "1", "1", "1", "3"]]}
+    assert tw_inst.parse_twse_t86(t86) == {"2330": [800.0, 300.0, 1100.0]}
+    assert tw_inst.parse_twse_t86({"stat": "很抱歉，沒有符合條件的資料!"}) is None
+    f = ["代號", "名稱"] + ["買進股數", "賣出股數", "買賣超股數"] * 7 + ["三大法人買賣超股數合計"]
+    row = ["6654", "天正"] + [0] * 22
+    row[10], row[13], row[23] = "5,000", "-100", "4,900"
+    assert tw_inst.parse_tpex_insti({"tables": [{"fields": f, "data": [row]}]}) == {"6654": [5000.0, -100.0, 4900.0]}
+    # pledge ratio is summed over the directors of one company
+    rows = [{"公司代號": "1101", "目前持股": "1000", "設質股數": "100"}, {"公司代號": "1101", "目前持股": "1000", "設質股數": "500"},
+            {"公司代號": "ABCD", "目前持股": "1", "設質股數": "1"}]
+    assert tw_inst.parse_pledge(rows) == {"1101": 0.3}
+    assert tw_inst.parse_transfers([{"公司代號": "6534", "預定轉讓總股數-自有持股": "2000000"}, {"公司代號": "", "預定轉讓總股數-自有持股": ""}]) == {"6534": 2000000.0}
+    # flows as a share of volume, and the flags
+    import datetime as dt
+    days = [dt.date(2026, 10, 1) + dt.timedelta(days=i) for i in range(6)]
+    inst = {d: {"2330": [100, 0, 100]} for d in days}
+    price = {d: {"2330": [1000.0, 1000, 1e6, None]} for d in days}
+    fr = tw_inst.inst_frame(inst, price)
+    assert abs(fr.loc["2330", "inst_20d"] - 0.1) < 1e-9
+    df = pd.DataFrame({"flags": [[]], "inst_20d": [0.1], "inst_5d": [0.1], "pledge_ratio": [0.5], "xfer_shares": [5e6], "shares_out": [1e9]}, index=["2330"])
+    assert set(tw_inst.add_flags(df).loc["2330", "flags"]) == {"inst_buy", "high_pledge", "insider_selling"}
