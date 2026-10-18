@@ -300,7 +300,7 @@
 
   // ── controls ────────────────────────────────────────────────────────────
   function wireControls() {
-    const tabs = $$('.seg button');
+    const tabs = $$('#tabs-us button');
     tabs.forEach((b, i) => {
       b.addEventListener('click', () => setTab(b.dataset.tab));
       b.addEventListener('keydown', (e) => {
@@ -309,6 +309,7 @@
         next.focus(); setTab(next.dataset.tab);
       });
     });
+    $$('#market button').forEach((b) => b.addEventListener('click', () => setMarket(b.dataset.market)));
     wireViews();
     $('#r-portal').addEventListener('change', (e) => { state.portal = e.target.value; applyFilters(); });
     $('#r-soon').addEventListener('change', (e) => { state.soon = e.target.checked; applyFilters(); });
@@ -331,9 +332,16 @@
     });
   }
 
+  function setMarket(m) {
+    state.market = m;
+    $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === m)));
+    $('#tabs-us').hidden = m === 'tw';
+    if (m === 'tw') { if (state.tab !== 'tw') state.lastUs = state.tab; setTab('tw'); } else setTab(state.lastUs || 'main');
+  }
+
   function setTab(tab) {
     state.tab = tab;
-    $$('.seg button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+    $$('#tabs-us button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
     const rep = tab === 'report' || tab === 'heat';
     const raise = tab === 'raise';
     const tw = tab === 'tw';

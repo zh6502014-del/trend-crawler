@@ -15,7 +15,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
   <script defer src="config.js"></script>
-  <script defer src="app.js?v=20261021"></script>
+  <script defer src="app.js?v=20261022"></script>
 </head>
 <body>
   <header class="top glass">
@@ -43,10 +43,13 @@
 
     <div id="app" hidden>
       <div class="controls">
-        <div class="seg glass" role="tablist" aria-label="清單">
+        <div class="seg glass" id="market" role="tablist" aria-label="市場">
+          <button role="tab" data-market="us" aria-selected="true">美股</button>
+          <button role="tab" data-market="tw" aria-selected="false">台股</button>
+        </div>
+        <div class="seg glass" id="tabs-us" role="tablist" aria-label="清單">
           <button role="tab" data-tab="main" aria-selected="true">主榜</button>
           <button role="tab" data-tab="watch" aria-selected="false">觀察清單</button>
-          <button role="tab" data-tab="tw" aria-selected="false">台股</button>
           <button role="tab" data-tab="raise" aria-selected="false">未上市募資</button>
           <button role="tab" data-tab="heat" aria-selected="false">熱度圖</button>
           <button role="tab" data-tab="report" aria-selected="false">成績單</button>
