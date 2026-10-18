@@ -28,7 +28,7 @@ TWSE_XFER = ["https://openapi.twse.com.tw/v1/opendata/t187ap12_L"]
 TPEX_XFER = ["https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap12_O"]
 
 KEEP_DAYS = 30           # trading days of flows we keep around (20 are used)
-BUY_20D = 0.05           # "法人買超": net buying over 20 days >= 5% of the traded volume ...
+BUY_20D = 0.10           # "法人買超": net buying over 20 days >= 10% of the traded volume (about the top quarter) ...
 PLEDGE_WARN = 0.30       # directors pledged >= 30% of what they hold
 XFER_WARN = 0.002        # insiders declared a transfer of >= 0.2% of the shares outstanding
 

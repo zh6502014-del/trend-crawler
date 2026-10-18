@@ -48,7 +48,7 @@
     thin_volume: { label: '成交薄', tone: 'warn', help: '日均成交額偏低，小額也可能買貴、賣不掉。' },
     micro_cap: { label: '市值極小', tone: 'warn', help: '市值很小，價格波動與資訊落差都會放大。' },
     crowded: { label: '已擁擠', tone: '', help: 'Hacker News 提及與成交額都偏高，已經有不少人注意到，資訊落差變小。' },
-    inst_buy: { label: '法人買超', tone: 'ok', help: '近 20 日三大法人（外資、投信、自營商）合計買超，占同期成交量 5% 以上，而且最近 5 日仍在買。' },
+    inst_buy: { label: '法人買超', tone: 'ok', help: '近 20 日三大法人（外資、投信、自營商）合計買超，占同期成交量 10% 以上（約前四分之一），而且最近 5 日仍在買。' },
     high_pledge: { label: '董監設質高', tone: 'warn', help: '董事與監察人持股中，已質押的比例達 30% 以上；股價下跌時可能被迫補繳或賣股。' },
     insider_selling: { label: '內部人申報轉讓', tone: 'warn', help: '內部人申報預定轉讓（可能是賣出、贈與或信託），股數達已發行股數 0.2% 以上。' },
     data_thin: { label: '資料不足', tone: '', help: '季度財報不足四季或缺毛利率（金融業看淨利率），這個分數可信度較低。' },
