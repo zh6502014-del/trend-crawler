@@ -1,16 +1,17 @@
 """Daily digest: what changed on the boards since the previous run, sent to LINE (and Telegram if configured).
 
-One message a day, sent at the end of the US run (Taipei morning). It also carries a Taiwan section built from the
-latest Taiwan run (the previous Taipei afternoon), so both markets share the single daily push.
+Production sends one digest per market snapshot, after each market crawl.
+Manual runs may use DIGEST_MARKET=both to combine the markets.
 
-Runs after the other stages. Does nothing (and never fails the run) unless TELEGRAM_BOT_TOKEN and
-TELEGRAM_CHAT_ID are set. The message is plain text and short on purpose.
+Runs after the other stages. Requires LINE_CHANNEL_TOKEN/LINE_USER_ID or
+TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID. The message is plain text and short on purpose.
 """
 from __future__ import annotations
 
 import datetime as dt
 import os
 import re
+import uuid
 
 import requests
 
@@ -108,7 +109,7 @@ def compose(today_rows: list[dict], prev_rows: list[dict], smart: dict, raises: 
     head_lines, lines = [], []
     if fired:
         head_lines.append("你設的提醒：" + "、".join(
-            f"{a['ticker']} {METRICS[a['metric']]}{a['op']}{a['value']:g}（現在 {a['now']:.0f}）" for a in fired[:6]))
+            f"{a['ticker']} {METRICS[a['metric']]}{a['op']}{a['value']:g}（現在 {a['now']:.0f}）" for a in fired))
     if watch_msgs:
         lines.append("自選異動：\n" + "\n".join(watch_msgs[:8]))
     if entered:
@@ -146,7 +147,7 @@ LINE_RESERVE = 20                                                # always keep t
 def line_budget_ok(token: str, session=None) -> tuple[bool, str]:
     """Ask LINE how many messages this month's plan allows and how many are used. Fail CLOSED: any doubt means do not send.
 
-    Sends only on a plan with a hard monthly limit (the free plan), never on an unlimited / pay-per-message plan,
+    Sends only on a plan with a hard monthly limit (this alone does not prove the account is free), never on an unlimited plan,
     and only while usage + 1 stays under min(LINE_MONTHLY_CAP, limit - LINE_RESERVE).
     """
     sess = session or requests
@@ -167,11 +168,29 @@ def line_budget_ok(token: str, session=None) -> tuple[bool, str]:
     return True, f"used {used} of ceiling {ceiling}"
 
 
-def send_line(text: str, token: str, user_id: str) -> None:
-    """LINE Messaging API push to one user (LINE Notify was shut down in 2025)."""
-    r = requests.post("https://api.line.me/v2/bot/message/push",
-                      headers={"Authorization": f"Bearer {token}"},
-                      json={"to": user_id, "messages": [{"type": "text", "text": text[:4900]}]}, timeout=30)
+def line_messages(text: str) -> list[dict]:
+    """One request, up to five chunks. Count UTF-16 units as required by LINE."""
+    chunks, current, units = [], [], 0
+    for c in text:
+        size = 2 if ord(c) > 0xFFFF else 1
+        if units + size > 4900:
+            chunks.append({"type": "text", "text": "".join(current)})
+            current, units = [], 0
+        current.append(c)
+        units += size
+    if current:
+        chunks.append({"type": "text", "text": "".join(current)})
+    if not chunks or len(chunks) > 5:
+        raise ValueError("Digest exceeds one LINE request; no alerts were acknowledged")
+    return chunks
+
+
+def send_line(text: str, token: str, user_id: str, retry_key: str | None = None) -> None:
+    headers = {"Authorization": f"Bearer {token}", "X-Line-Retry-Key": retry_key or str(uuid.uuid4())}
+    r = requests.post("https://api.line.me/v2/bot/message/push", headers=headers,
+                      json={"to": user_id, "messages": line_messages(text)}, timeout=30)
+    if r.status_code == 409 and r.headers.get("x-line-accepted-request-id"):
+        return  # The exact same request was already accepted by LINE.
     r.raise_for_status()
 
 
@@ -201,71 +220,96 @@ def taiwan_section(store, today: dt.date, watch: list[str], alerts: list[dict]) 
     return ({"as_of": str(dates[0])[:10], "lines": lines} if lines else None), fired
 
 
-def run_digest(store, today: dt.date | None = None) -> dict:
+def run_digest(store, today: dt.date | None = None, market: str | None = None) -> dict:
+    """Split-market delivery in production; 'both' remains available for manual runs."""
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
     line_token, line_user = os.getenv("LINE_CHANNEL_TOKEN"), os.getenv("LINE_USER_ID")
     use_tg, use_line = bool(token and chat), bool(line_token and line_user)
     if not use_tg and not use_line:
-        print("  digest: no TELEGRAM_* or LINE_* secrets set, skipped")
         return {"sent": False, "reason": "not configured"}
-    today = today or dt.date.today()
-    dates = sorted({r["as_of"] for r in store.select("scores", {"select": "as_of", "as_of": f"gte.{(today - dt.timedelta(days=14)).isoformat()}", "rank": "eq.1", "board": "eq.main"})}, reverse=True)
-    if not dates:
-        return {"sent": False, "reason": "no scores"}
-    cols = "ticker,as_of,board,rank,score"
-    cur = store.select("scores", {"select": cols, "as_of": f"eq.{dates[0]}", "board": "eq.main"})
-    prev = store.select("scores", {"select": cols, "as_of": f"eq.{dates[1]}", "board": "eq.main"}) if len(dates) > 1 else []
-    smart = {r["ticker"]: r for r in store.select("smart_money", {"select": "ticker,score,tags"})}
-    since = (today - dt.timedelta(days=1)).isoformat()
-    raises = store.select("fundraises", {"select": "issuer,filed_at,form_type", "filed_at": f"gte.{since}", "form_type": "eq.C"})
-    watch, alerts, wt, wp = [], [], {}, {}
-    try:
-        watch = sorted({r["ticker"] for r in store.select("user_watch", {"select": "ticker"})})
-        alerts = [a for a in store.select("user_alerts", {"select": "id,ticker,metric,op,value,fired_at"}) if not a.get("fired_at")]
-    except Exception as e:  # noqa: BLE001 - missing table / no rows must not stop the digest
-        print(f"  digest: watchlist/alerts unavailable ({str(e)[:80]})")
-    tw_watch = [t for t in watch if is_tw(t)]
-    watch = [t for t in watch if not is_tw(t)]
-    tw_alerts = [a for a in alerts if is_tw(a.get("ticker"))]
-    alerts = [a for a in alerts if not is_tw(a.get("ticker"))]
-    names = sorted(set(watch) | {a["ticker"] for a in alerts})
-    if names:
-        lst = "in.(" + ",".join(names) + ")"
-        wt = {r["ticker"]: r for r in store.select("scores", {"select": cols, "as_of": f"eq.{dates[0]}", "ticker": lst})}
-        if len(dates) > 1:
-            wp = {r["ticker"]: r for r in store.select("scores", {"select": cols, "as_of": f"eq.{dates[1]}", "ticker": lst})}
-    fired = check_alerts(alerts, wt)
-    tw, tw_fired = None, []
-    try:
-        tw, tw_fired = taiwan_section(store, today, tw_watch, tw_alerts)
-    except Exception as e:  # noqa: BLE001 - Taiwan is a bonus: never block the US digest
-        print(f"  digest: taiwan section skipped ({str(e)[:100]})")
-    fired = fired + tw_fired
-    text = compose(cur, prev, smart, raises, str(dates[0])[:10], watch_lines(watch, wt, wp, smart), fired, tw)
+    market = market or os.getenv("DIGEST_MARKET", "both")
+    if market not in ("us", "tw", "both"):
+        raise ValueError("DIGEST_MARKET must be us, tw or both")
+    today = today or dt.datetime.now(dt.timezone.utc).date()
+    owner = store.owner_id() if hasattr(store, "owner_id") else os.getenv("OWNER_UID")
+    scope = {"user_id": f"eq.{owner}"} if owner else {}
+    watch = sorted({r["ticker"] for r in store.select("user_watch", {"select": "ticker", **scope})})
+    alerts = store.select("user_alerts", {"select": "id,ticker,metric,op,value,fired_at", "fired_at": "is.null", **scope})
+    alerts = [a for a in alerts if not a.get("fired_at")]
+    cur, prev, smart, raises, wt, wp, fired = [], [], {}, [], {}, {}, []
+    dates = []
+    if market != "tw":
+        dates = sorted({r["as_of"] for r in store.select("scores", {"select": "as_of", "as_of": f"gte.{(today - dt.timedelta(days=14)).isoformat()}", "rank": "eq.1", "board": "eq.main"})}, reverse=True)
+        if not dates or (today - dt.date.fromisoformat(str(dates[0])[:10])).days > 1:
+            return {"sent": False, "reason": "no fresh US scores"}
+        cols = "ticker,as_of,board,rank,score"
+        cur = store.select("scores", {"select": cols, "as_of": f"eq.{dates[0]}", "board": "eq.main"})
+        prev = store.select("scores", {"select": cols, "as_of": f"eq.{dates[1]}", "board": "eq.main"}) if len(dates) > 1 else []
+        smart = {r["ticker"]: r for r in store.select("smart_money", {"select": "ticker,score,tags"})}
+        raises = store.select("fundraises", {"select": "issuer,filed_at,form_type", "filed_at": f"gte.{(today - dt.timedelta(days=1)).isoformat()}", "form_type": "eq.C"})
+        names = sorted({t for t in watch if not is_tw(t)} | {a["ticker"] for a in alerts if not is_tw(a["ticker"])})
+        if names:
+            filters = {"select": cols, "ticker": "in.(" + ",".join(names) + ")"}
+            wt = {r["ticker"]: r for r in store.select("scores", {**filters, "as_of": f"eq.{dates[0]}"})}
+            wp = {r["ticker"]: r for r in store.select("scores", {**filters, "as_of": f"eq.{dates[1]}"})} if len(dates) > 1 else {}
+        fired = check_alerts([a for a in alerts if not is_tw(a["ticker"])], wt)
+    tw = None
+    if market != "us":
+        tw, tw_fired = taiwan_section(store, today, [t for t in watch if is_tw(t)], [a for a in alerts if is_tw(a["ticker"])])
+        fired += tw_fired
+        if market == "tw":
+            # Get the snapshot date even when only an alert, rather than a board change, fired.
+            dates = sorted({r["as_of"] for r in store.select("tw_scores", {"select": "as_of", "rank": "eq.1", "board": "eq.tw_main", "as_of": f"gte.{(today - dt.timedelta(days=1)).isoformat()}"})}, reverse=True)
+            if not dates:
+                return {"sent": False, "reason": "no fresh Taiwan scores"}
+    as_of = str(dates[0])[:10]
+    text = compose(cur, prev, smart, raises, as_of, watch_lines([t for t in watch if not is_tw(t)], wt, wp, smart), fired, tw)
     if not text:
-        print("  digest: nothing new")
         return {"sent": False, "reason": "nothing new"}
     sent = []
-    for name, ok, fn in (("telegram", use_tg, lambda: send_telegram(text, token, chat)),
-                         ("line", use_line, lambda: send_line(text, line_token, line_user))):
-        if not ok:
+    # LINE is authoritative for alert delivery when it is configured. A Telegram
+    # success alone must never silently consume an alert that LINE failed to send.
+    for name, enabled, recipient in (("line", use_line, line_user), ("telegram", use_tg, chat)):
+        if not enabled:
             continue
         try:
+            key = f"{name}:{recipient}:{market}:{as_of}"
+            record = store.prepare_delivery(key, recipient, text, [a["id"] for a in fired]) if hasattr(store, "prepare_delivery") else None
+            body = record["body"] if record else text
+            ids = record["alert_ids"] if record else [a["id"] for a in fired]
+            if record and record.get("sent_at"):
+                # Recover the case where delivery succeeded but acknowledgement failed.
+                if name == "line" or not use_line:
+                    for alert_id in ids:
+                        store.update("user_alerts", {"id": alert_id}, {"fired_at": record["sent_at"]})
+                continue
+            if record and dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["created_at"].replace("Z", "+00:00")) >= dt.timedelta(hours=23):
+                print(f"  digest: {name} pending delivery expired; manual review required")
+                continue  # Never reuse a retry key after LINE's 24-hour guarantee.
             if name == "line":
+                line_messages(body)  # Validate completeness before sending anything.
                 ok, why = line_budget_ok(line_token)
-                print(f"  digest: line budget: {why}")
                 if not ok:
+                    print(f"  digest: {why}")
                     continue
-            fn()
+                if record:
+                    send_line(body, line_token, recipient, record["retry_key"])
+                else:
+                    send_line(body, line_token, recipient)
+            else:
+                send_telegram(body, token, recipient)
+            now = dt.datetime.now(dt.timezone.utc).isoformat()
+            if record:
+                store.update("line_deliveries", {"delivery_key": key}, {"sent_at": now})
+            if name == "line" or not use_line:
+                for alert_id in ids:
+                    store.update("user_alerts", {"id": alert_id}, {"fired_at": now})
             sent.append(name)
-        except Exception as e:  # noqa: BLE001 - a failed notification must not fail the crawl
-            print(f"  digest: {name} failed: {str(e)[:150]}")
-    if sent and fired:  # alerts are one-shot: disarm only once the message actually went out
-        now = dt.datetime.now(dt.timezone.utc).isoformat()
-        for a in fired:
-            try:
-                store.update("user_alerts", {"id": a["id"]}, {"fired_at": now})
-            except Exception as e:  # noqa: BLE001
-                print(f"  digest: could not disarm alert {a['id']}: {str(e)[:80]}")
-    print(f"  digest: sent via {sent or 'nobody'}")
+        except Exception as e:
+            print(f"  digest: {name} failed: {type(e).__name__}: {str(e)[:100]}")
     return {"sent": bool(sent), "channels": sent}
+
+
+if __name__ == "__main__":
+    from .store import Supabase
+    print(run_digest(Supabase()))

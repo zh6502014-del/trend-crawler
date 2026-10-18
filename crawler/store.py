@@ -118,6 +118,21 @@ class Supabase:
         params = {k: f"eq.{v}" for k, v in match.items()}
         self._req("PATCH", f"/{table}", params=params, data=json.dumps(clean(values), allow_nan=False))
 
+    def owner_id(self) -> str:
+        if os.getenv("OWNER_UID"):
+            return os.environ["OWNER_UID"]
+        response = self.s.get(self.base.removesuffix('/rest/v1') + '/auth/v1/admin/users', params={'per_page': 2}, timeout=15)
+        response.raise_for_status()
+        users = response.json().get('users', [])
+        if len(users) != 1:
+            raise RuntimeError('Set OWNER_UID when the dashboard does not have exactly one user')
+        return users[0]['id']
+
+    def prepare_delivery(self, key: str, recipient: str, body: str, alert_ids: list) -> dict:
+        return self._req('POST', '/rpc/prepare_line_delivery', json={
+            'p_key': key, 'p_recipient': recipient, 'p_body': body, 'p_alert_ids': alert_ids,
+        }).json()[0]
+
 
 class MemoryStore:
     """Same interface, no network. Used by --dry-run and the tests."""

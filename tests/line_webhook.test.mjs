@@ -55,7 +55,7 @@ test("stock card: freshness line + quick replies reflect watch state", async () 
   const db = mkDb({ "latest_board?ticker=eq.NRXS": [board], "smart_money": [], "user_watch": [{ ticker: "NRXS" }] });
   const out = await run({ cmd: "stock", ticker: "NRXS" }, db, {});
   const items = out[0].quickReply.items.map((i) => i.action.text);
-  assert.deepEqual(items, ["刪 NRXS", "提醒 NRXS", "大戶 NRXS", "榜單"]);
+  assert.deepEqual(items, ["刪 NRXS", "提醒 NRXS", "大戶 NRXS", "榜單", "解讀 NRXS", "讀筆記 NRXS"]);
   assert.match(JSON.stringify(out[0].contents), /資料截至 2026-10-15/);
   const db2 = mkDb({ "latest_board?ticker=eq.NRXS": [board], "user_watch": [] });
   assert.equal((await run({ cmd: "stock", ticker: "NRXS" }, db2, {}))[0].quickReply.items[0].action.text, "加 NRXS");
@@ -121,10 +121,11 @@ test("slow database → timeout reply (handle)", async () => {
   process.env.LINE_CHANNEL_SECRET = "s"; process.env.LINE_USER_ID = "U1"; process.env.LINE_CHANNEL_TOKEN = "t";
   process.env.SUPABASE_URL = "http://db"; process.env.SUPABASE_SERVICE_ROLE_KEY = "k";
   const { handle, TIMEOUT_MS } = await import("../supabase/functions/line-webhook/index.ts");
-  const body = JSON.stringify({ events: [{ type: "message", webhookEventId: "e1", replyToken: "rt", source: { userId: "U1" }, message: { type: "text", text: "NRXS" } }] });
+  const body = JSON.stringify({ events: [{ type: "message", webhookEventId: "e1", replyToken: "rt", source: { type: "user", userId: "U1" }, message: { type: "text", text: "NRXS" } }] });
   const mac = Buffer.from(await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", new TextEncoder().encode("s"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), new TextEncoder().encode(body))).toString("base64");
   const replies = [];
   const fetchFn = async (url, opt) => {
+    if (String(url).includes("/rpc/claim_line_event")) return {ok:true,json:async()=>true};
     if (String(url).includes("api.line.me")) { replies.push(JSON.parse(opt.body)); return { ok: true, text: async () => "" }; }
     return new Promise(() => {}); // database never answers
   };
@@ -335,6 +336,8 @@ test("設定選單: first run parks aliases, builds both menus, repoints aliases
   const ok = (j) => ({ ok: true, status: 200, json: async () => j, text: async () => "", arrayBuffer: async () => new ArrayBuffer(4) });
   const fetchFn = async (url, opt = {}) => {
     const m = opt.method || "GET"; calls.push(m + " " + url);
+    if (url.includes("/auth/v1/admin/users")) return ok({users:[{id:"u1",email:"owner@example.invalid"}]});
+    if (url.includes("/rest/v1/line_sessions")) return ok([]);
     if (url.endsWith(".png")) return ok({});
     if (url.endsWith("/richmenu/alias/list")) return ok({ aliases: [] });
     if (url.endsWith("/v2/bot/richmenu") && m === "POST") {
@@ -348,7 +351,7 @@ test("設定選單: first run parks aliases, builds both menus, repoints aliases
     if (url.includes("api.line.me/v2/bot/message/reply")) { calls.reply = JSON.parse(opt.body); return ok({}); }
     return ok({});
   };
-  const body = JSON.stringify({ events: [{ type: "message", webhookEventId: "menu1", replyToken: "rt", source: { userId: "U1" }, message: { type: "text", text: "設定選單" } }] });
+  const body = JSON.stringify({ events: [{ type: "message", webhookEventId: "menu1", replyToken: "rt", source: { type: "user", userId: "U1" }, message: { type: "text", text: "設定選單" } }] });
   const mac = Buffer.from(await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", new TextEncoder().encode("s"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), new TextEncoder().encode(body))).toString("base64");
   await handle(new Request("http://x", { method: "POST", body, headers: { "x-line-signature": mac } }), fetchFn);
   assert.match(calls.reply.messages[0].text, /選單已建立（美股／台股/);

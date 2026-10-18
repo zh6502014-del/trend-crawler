@@ -48,6 +48,9 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          OWNER_UID: ${{ secrets.OWNER_UID }}
+          LINE_MONTHLY_CAP: ${{ vars.LINE_MONTHLY_CAP || '100' }}
+          DIGEST_MARKET: us
           DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
           ONLY: ${{ inputs.only }}
           FULL_REFRESH: ${{ inputs.full_refresh && '1' || '' }}
