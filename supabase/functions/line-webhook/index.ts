@@ -492,7 +492,7 @@ async function twStock(cmd, db, dash) {
   } catch (_) { /* buttons still work */ }
   extra.url = (await dashLink(db, dash, t)).url;
   return withQuick([twStockCard(r, extra)], [
-    watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("台股榜單", "台股"), qr("台股今日", "台股今日"),
+    watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("法人動向", "大戶 " + t), qr("台股榜單", "台股"),
     ...(r.sector ? [qr(("同產業 " + r.sector).slice(0, 20), "台股產業 " + r.sector)] : []),
   ]);
 }
@@ -551,14 +551,14 @@ export async function run(cmd, db, ctx) {
       return withQuick([compareCard(A, B, tw)], [qr(cmd.a, cmd.a), qr(cmd.b, cmd.b), tw ? qr("台股榜單", "台股") : qr("榜單", "榜單")]);
     }
     case "alertmenu": {
-      if (isTw(cmd.ticker)) return [{ type: "text", text: "台股提醒還沒支援（每日摘要目前只看美股）。" }];
-      const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
+      const tw = isTw(cmd.ticker);
+      const rows = await db.get(`${mk(tw).view}?ticker=eq.${enc(cmd.ticker)}&limit=1`);
       if (!rows.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有可設定的條件。` }];
       const r = rows[0], t = cmd.ticker, sc = Math.round(r.score);
       const opts = [`分數>${sc + 5}`, `分數>${sc + 10}`, `分數<${Math.max(0, sc - 5)}`];
       if (r.rank > 10) opts.push("排名<=10");
       if (r.rank > 20) opts.push("排名<=20");
-      return withQuick([{ type: "text", text: `${t} 目前分數 ${num(r.score)}、${r.board === "main" ? "主榜" : "觀察"}第 ${r.rank} 名。\n點下方條件，或自己輸入，例如：提醒 ${t} 分數>${sc + 5}` }],
+      return withQuick([{ type: "text", text: `${t} 目前分數 ${num(r.score)}、${tw ? "台股" : ""}${r.board === "main" || r.board === "tw_main" ? "主榜" : "觀察"}第 ${r.rank} 名。\n點下方條件，或自己輸入，例如：提醒 ${t} 分數>${sc + 5}` }],
         opts.map((o) => qr(o, `提醒 ${t} ${o}`)));
     }
     case "top": {
@@ -613,7 +613,7 @@ export async function run(cmd, db, ctx) {
       const row = { user_id: uid, ticker: cmd.ticker, updated_at: new Date().toISOString() };
       if (cmd.cmd === "note") row.note = cmd.text;
       await db.send("POST", "user_watch?on_conflict=user_id,ticker", [row], "resolution=merge-duplicates,return=minimal");
-      return withQuick([{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }], [qr("自選", "自選"), ...(isTw(cmd.ticker) ? [] : [qr("設提醒", "提醒 " + cmd.ticker)])]);
+      return withQuick([{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }], [qr("自選", "自選"), qr("設提醒", "提醒 " + cmd.ticker)]);
     }
     case "smart": {
       if (cmd.tw || (cmd.ticker && isTw(cmd.ticker))) return twFlows(cmd, db);
@@ -694,14 +694,13 @@ export async function run(cmd, db, ctx) {
         cmd.tw ? [qr("台股今日", "台股今日"), qr("自選", "自選"), qr("台股榜單", "台股"), qr("美股週報", "週報")] : [qr("今日", "今日"), qr("自選", "自選"), qr("榜單", "榜單"), qr("台股週報", "台股週報")]);
     }
     case "alert": {
-      if (isTw(cmd.ticker)) return [{ type: "text", text: "台股提醒還沒支援（每日摘要目前只看美股）。" }];
       const uid = await db.ownerId();
-      const ex = await db.get(`entities?ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`);
+      const ex = await db.get(`${mk(isTw(cmd.ticker)).ent}?ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`);
       if (!ex.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有設定。` }];
       const mine = await db.get(`user_alerts?user_id=eq.${uid}&fired_at=is.null&select=id`);
       if (mine.length >= 20) return [{ type: "text", text: "未觸發的提醒已達 20 則上限，先刪一些。" }];
       await db.send("POST", "user_alerts", [{ user_id: uid, ticker: cmd.ticker, metric: cmd.metric, op: cmd.op, value: cmd.value }]);
-      return [{ type: "text", text: `已設定：${cmd.ticker} ${cmd.metric === "score" ? "分數" : "排名"}${cmd.op}${cmd.value}。條件成立時會放進下一次每日摘要，只通知一次。` }];
+      return [{ type: "text", text: `已設定：${cmd.ticker} ${cmd.metric === "score" ? "分數" : "排名"}${cmd.op}${cmd.value}。條件成立時會放進下一次每日摘要（台北早上），只通知一次。${isTw(cmd.ticker) ? "台股以前一個交易日收盤後的分數判斷。" : ""}` }];
     }
     case "alerts": {
       const uid = await db.ownerId();

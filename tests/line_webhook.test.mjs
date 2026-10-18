@@ -279,7 +279,11 @@ test("Taiwan top list, compare and unsupported features", async () => {
   assert.match(JSON.stringify(cmp[0]), /兆/);
   const mixed = await run(parseCommand("比較 NRXS 2330"), mkDb({}), {});
   assert.match(mixed[0].text, /不能直接比/);
-  assert.match((await run(parseCommand("提醒 2330 分數>80"), mkDb({}), {}))[0].text, /還沒支援/);
+  const w = []; const adb = mkDb({ "tw_entities?ticker=eq.2330": [{ ticker: "2330" }], "user_alerts": [] }); adb.send = async (m, p, b) => w.push({ p, b });
+  const set = await run(parseCommand("提醒 2330 分數>80"), adb, {});
+  assert.match(set[0].text, /已設定：2330 分數>80/); assert.equal(w[0].p, "user_alerts"); assert.equal(w[0].b[0].ticker, "2330");
+  const menu = await run(parseCommand("提醒 2330"), mkDb({ "tw_latest_board?ticker=eq.2330": [twRow] }), {});
+  assert.match(menu[0].text, /台股主榜第 3 名/); assert.ok(menu[0].quickReply.items.every((i) => parseCommand(i.action.text).cmd === "alert"));
   const flows = await run(parseCommand("大戶 2330"), mkDb({ "tw_latest_board?ticker=eq.2330": [{ ...twRow, inst_5d: 0.04, inst_20d: 0.08, foreign_20d: 0.06, trust_20d: 0.01, pledge_ratio: 0.35 }] }), {});
   assert.match(flows[0].text, /三大法人　5 日 \+4\.0%　20 日 \+8\.0%/); assert.match(flows[0].text, /董監設質 35%（偏高）/);
   const list = await run(parseCommand("台股法人"), mkDb({ "tw_latest_board?board=eq.tw_main&inst_20d": [{ ...twRow, inst_20d: 0.08, foreign_20d: 0.06, trust_20d: 0.01 }] }), {});

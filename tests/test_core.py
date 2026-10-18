@@ -695,3 +695,95 @@ def test_digest_watchlist_and_alerts():
     fired = digest.check_alerts(al, today)
     msg = digest.compose([], [], {}, [], "2026-10-14", digest.watch_lines(["AAA"], today, prev, {}), fired)
     assert "你設的提醒：AAA 分數>70" in msg and "自選異動" in msg
+
+
+# ── digest: Taiwan section and Taiwan alerts ───────────────────────────────
+class FilterStore:
+    """Tiny in-memory store that understands the eq./gte./in.() filters the digest uses."""
+    def __init__(self, tables):
+        self.tables, self.updates = tables, []
+
+    def select(self, table, params=None, page=1000):
+        rows = list(self.tables.get(table, []))
+        for k, v in (params or {}).items():
+            if k == "select":
+                continue
+            v = str(v)
+            if v.startswith("eq."):
+                rows = [r for r in rows if str(r.get(k)) == v[3:]]
+            elif v.startswith("gte."):
+                rows = [r for r in rows if str(r.get(k)) >= v[4:]]
+            elif v.startswith("in.("):
+                keep = set(v[4:-1].split(","))
+                rows = [r for r in rows if str(r.get(k)) in keep]
+        return [dict(r) for r in rows]
+
+    def update(self, table, match, values):
+        self.updates.append((table, match, values))
+
+
+def _tw_rows(day, ranks, scores, flags=None):
+    return [{"ticker": t, "as_of": day, "board": "tw_main", "rank": ranks[t], "score": scores[t], "flags": (flags or {}).get(t, [])} for t in ranks]
+
+
+def test_digest_is_tw():
+    from crawler import digest
+    assert digest.is_tw("2330") and digest.is_tw("00878") and digest.is_tw("6488A")
+    assert not digest.is_tw("NRXS") and not digest.is_tw("123") and not digest.is_tw("BRK.B")
+
+
+def test_digest_tw_lines_and_labels():
+    from crawler import digest
+    cur = _tw_rows("2026-10-19", {"2330": 1, "2454": 2, "3008": 30}, {"2330": 80, "2454": 70, "3008": 60}, {"2454": ["inst_buy"]})
+    prev = _tw_rows("2026-10-16", {"2330": 1, "2454": 25, "3008": 30}, {"2330": 79, "2454": 61, "3008": 60})
+    for r in cur:
+        r["name"] = {"2330": "台積電", "2454": "聯發科"}.get(r["ticker"], "")
+    lines = digest.tw_lines(cur, prev, ["2330　分數 70→80"])
+    assert lines[0].startswith("自選異動")
+    assert any("新進前 20 名：2454聯發科（第2名）" in x for x in lines)
+    assert any("分數大幅上升：2454聯發科 +9" in x for x in lines)
+    assert any("前 20 名法人買超：2454聯發科" in x for x in lines)
+    msg = digest.compose([], [], {}, [], "2026-10-16", [], [], {"as_of": "2026-10-19", "lines": lines})
+    assert "【台股 2026-10-19】" in msg and "【美股】" not in msg      # US had nothing to say
+    us = [{"ticker": "AAA", "board": "main", "rank": 1, "score": 90}]
+    msg2 = digest.compose(us, [{"ticker": "AAA", "board": "main", "rank": 1, "score": 80}], {}, [], "2026-10-16", [], [], {"as_of": "2026-10-19", "lines": lines})
+    assert msg2.index("【美股】") < msg2.index("分數大幅上升：AAA") < msg2.index("【台股")
+    assert digest.compose([], [], {}, [], "2026-10-16", [], [], None) is None
+
+
+def test_digest_taiwan_section_freshness_and_alerts():
+    from crawler import digest
+    st = FilterStore({
+        "tw_scores": _tw_rows("2026-10-19", {"2330": 1, "2454": 2}, {"2330": 82, "2454": 70}) + _tw_rows("2026-10-16", {"2330": 1, "2454": 30}, {"2330": 75, "2454": 60}),
+        "tw_entities": [{"ticker": "2330", "name": "台積電"}, {"ticker": "2454", "name": "聯發科"}],
+    })
+    alerts = [{"id": 7, "ticker": "2330", "metric": "score", "op": ">", "value": 80}]
+    sec, fired = digest.taiwan_section(st, dt.date(2026, 10, 19), ["2330"], alerts)
+    assert sec["as_of"] == "2026-10-19" and [a["id"] for a in fired] == [7]
+    assert any("2330" in x and "75→82" in x for x in sec["lines"])
+    assert any("2454聯發科" in x for x in sec["lines"])
+    stale, none = digest.taiwan_section(st, dt.date(2026, 10, 22), ["2330"], alerts)   # 3 days old: stay quiet
+    assert stale is None and none == []
+
+
+def test_run_digest_sends_one_message_with_both_markets(monkeypatch):
+    from crawler import digest
+    st = FilterStore({
+        "scores": [{"ticker": "AAA", "as_of": "2026-10-19", "board": "main", "rank": 1, "score": 90},
+                   {"ticker": "AAA", "as_of": "2026-10-16", "board": "main", "rank": 1, "score": 80}],
+        "smart_money": [], "fundraises": [],
+        "user_watch": [{"ticker": "AAA"}, {"ticker": "2330"}],
+        "user_alerts": [{"id": 1, "ticker": "2330", "metric": "rank", "op": "<=", "value": 1}],
+        "tw_scores": _tw_rows("2026-10-19", {"2330": 1}, {"2330": 82}) + _tw_rows("2026-10-16", {"2330": 3, "2454": 1}, {"2330": 70, "2454": 85}),
+        "tw_entities": [{"ticker": "2330", "name": "台積電"}],
+    })
+    sent = []
+    monkeypatch.setenv("LINE_CHANNEL_TOKEN", "t"); monkeypatch.setenv("LINE_USER_ID", "U")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False); monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setattr(digest, "line_budget_ok", lambda token: (True, "ok"))
+    monkeypatch.setattr(digest, "send_line", lambda text, token, user: sent.append(text))
+    out = digest.run_digest(st, dt.date(2026, 10, 19))
+    assert out["sent"] and len(sent) == 1
+    msg = sent[0]
+    assert "你設的提醒：2330 排名<=1" in msg and "【美股】" in msg and "【台股 2026-10-19】" in msg and "2330　分數 70→82" in msg
+    assert st.updates and st.updates[0][1] == {"id": 1}          # the Taiwan alert is disarmed after sending

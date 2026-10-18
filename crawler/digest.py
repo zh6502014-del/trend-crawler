@@ -1,4 +1,7 @@
-"""Daily digest: what changed on the boards since the previous run, sent to Telegram.
+"""Daily digest: what changed on the boards since the previous run, sent to LINE (and Telegram if configured).
+
+One message a day, sent at the end of the US run (Taipei morning). It also carries a Taiwan section built from the
+latest Taiwan run (the previous Taipei afternoon), so both markets share the single daily push.
 
 Runs after the other stages. Does nothing (and never fails the run) unless TELEGRAM_BOT_TOKEN and
 TELEGRAM_CHAT_ID are set. The message is plain text and short on purpose.
@@ -7,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 
 import requests
 
@@ -18,6 +22,12 @@ DASHBOARD = os.getenv("DASHBOARD_URL", "")
 WATCH_MOVE = 5.0     # score points a watchlist name must move to be mentioned
 OPS = {">": lambda a, b: a > b, ">=": lambda a, b: a >= b, "<": lambda a, b: a < b, "<=": lambda a, b: a <= b}
 METRICS = {"score": "分數", "rank": "排名"}
+MAIN_BOARDS = ("main", "tw_main")
+
+
+def is_tw(ticker) -> bool:
+    """Taiwan codes are 4-6 digits (plus an optional letter); US tickers start with a letter."""
+    return re.fullmatch(r"\d{4,6}[A-Za-z]?", str(ticker or "")) is not None
 
 
 def check_alerts(alerts: list[dict], rows: dict) -> list[dict]:
@@ -52,7 +62,7 @@ def watch_lines(watch: list[str], today: dict, prev: dict, smart: dict) -> list[
         if p.get("score") is not None and abs(r["score"] - p["score"]) >= WATCH_MOVE:
             bits.append(f"分數 {p['score']:.0f}→{r['score']:.0f}")
         if p.get("board") and p["board"] != r.get("board"):
-            bits.append("進入主榜" if r.get("board") == "main" else "掉出主榜")
+            bits.append("進入主榜" if r.get("board") in MAIN_BOARDS else "掉出主榜")
         sm = smart.get(t) or {}
         if (sm.get("score") or 0) > 0 and sm.get("tags"):
             bits.append("大戶：" + "/".join(tags.get(x, x) for x in sm["tags"]))
@@ -61,8 +71,31 @@ def watch_lines(watch: list[str], today: dict, prev: dict, smart: dict) -> list[
     return out
 
 
+def tw_lines(today_rows: list[dict], prev_rows: list[dict], watch_msgs: list[str] | None = None) -> list[str]:
+    """Taiwan section: watchlist moves, new top-20 names, big score jumps, top-20 names with 法人買超. Pure."""
+    cur = {r["ticker"]: r for r in today_rows if r.get("board") == "tw_main"}
+    prev = {r["ticker"]: r for r in prev_rows if r.get("board") == "tw_main"}
+    top = [r for r in cur.values() if (r.get("rank") or 999) <= TOP_N]
+    prev_top = {t for t, r in prev.items() if (r.get("rank") or 999) <= TOP_N}
+    out = []
+    if watch_msgs:
+        out.append("自選異動：\n" + "\n".join(watch_msgs[:8]))
+    entered = sorted((r for r in top if r["ticker"] not in prev_top), key=lambda r: r["rank"]) if prev else []
+    if entered:
+        out.append("新進前 20 名：" + "、".join(f"{r['ticker']}{r.get('name') or ''}（第{r['rank']}名）" for r in entered[:6]))
+    jumps = sorted((r for r in cur.values() if r["ticker"] in prev and r.get("score") is not None and prev[r["ticker"]].get("score") is not None
+                    and r["score"] - prev[r["ticker"]]["score"] >= JUMP), key=lambda r: -(r["score"] - prev[r["ticker"]]["score"]))[:5]
+    if jumps:
+        out.append("分數大幅上升：" + "、".join(f"{r['ticker']}{r.get('name') or ''} +{r['score'] - prev[r['ticker']]['score']:.0f}" for r in jumps))
+    buy = sorted((r for r in top if "inst_buy" in (r.get("flags") or [])), key=lambda r: r["rank"])
+    if buy:
+        out.append("前 20 名法人買超：" + "、".join(f"{r['ticker']}{r.get('name') or ''}" for r in buy[:6]))
+    return out
+
+
 def compose(today_rows: list[dict], prev_rows: list[dict], smart: dict, raises: list[dict], as_of: str,
-            watch_msgs: list[str] | None = None, fired: list[dict] | None = None) -> str | None:
+            watch_msgs: list[str] | None = None, fired: list[dict] | None = None,
+            tw: dict | None = None) -> str | None:
     """Pure function → message text, or None when there is nothing worth sending."""
     cur = {r["ticker"]: r for r in today_rows if r.get("board") == "main"}
     prev = {r["ticker"]: r for r in prev_rows if r.get("board") == "main"}
@@ -72,9 +105,9 @@ def compose(today_rows: list[dict], prev_rows: list[dict], smart: dict, raises: 
     jumps = sorted((r for r in cur.values() if r["ticker"] in prev and r.get("score") is not None and prev[r["ticker"]].get("score") is not None
                     and r["score"] - prev[r["ticker"]]["score"] >= JUMP), key=lambda r: -(r["score"] - prev[r["ticker"]]["score"]))[:5]
     big = sorted((r for r in top if (smart.get(r["ticker"]) or {}).get("score", 0) > 0), key=lambda r: r["rank"])
-    lines = []
+    head_lines, lines = [], []
     if fired:
-        lines.append("你設的提醒：" + "、".join(
+        head_lines.append("你設的提醒：" + "、".join(
             f"{a['ticker']} {METRICS[a['metric']]}{a['op']}{a['value']:g}（現在 {a['now']:.0f}）" for a in fired[:6]))
     if watch_msgs:
         lines.append("自選異動：\n" + "\n".join(watch_msgs[:8]))
@@ -88,11 +121,16 @@ def compose(today_rows: list[dict], prev_rows: list[dict], smart: dict, raises: 
             f"{r['ticker']}（{'/'.join(tags.get(x, x) for x in (smart[r['ticker']].get('tags') or []))}）" for r in big[:6]))
     if raises:
         lines.append("新的 Reg CF 募資：" + "、".join(r.get("issuer") or "?" for r in raises[:6]))
-    if not lines:
+    tw_part = (tw or {}).get("lines") or []
+    if tw_part:  # label the markets only when both are in the message
+        if lines:
+            lines = ["【美股】"] + lines
+        lines += [f"【台股 {tw.get('as_of', '')}】".replace(" 】", "】")] + tw_part
+    if not head_lines and not lines:
         return None
     head = f"趨勢爬蟲 {as_of}"
     tail = f"\n{DASHBOARD}" if DASHBOARD else ""
-    return head + "\n" + "\n".join(lines) + tail
+    return head + "\n" + "\n".join(head_lines + lines) + tail
 
 
 def send_telegram(text: str, token: str, chat_id: str) -> None:
@@ -137,6 +175,32 @@ def send_line(text: str, token: str, user_id: str) -> None:
     r.raise_for_status()
 
 
+def taiwan_section(store, today: dt.date, watch: list[str], alerts: list[dict]) -> tuple[dict | None, list[dict]]:
+    """Latest Taiwan board vs the one before, if it is fresh (made today or yesterday, UTC). Returns (section, fired alerts)."""
+    dates = sorted({r["as_of"] for r in store.select("tw_scores", {"select": "as_of", "as_of": f"gte.{(today - dt.timedelta(days=14)).isoformat()}", "rank": "eq.1", "board": "eq.tw_main"})}, reverse=True)
+    if not dates or (today - dt.date.fromisoformat(str(dates[0])[:10])).days > 1:
+        return None, []  # no fresh Taiwan run since the last digest: say nothing rather than repeat yesterday
+    cols = "ticker,as_of,board,rank,score,flags"
+    cur = store.select("tw_scores", {"select": cols, "as_of": f"eq.{dates[0]}", "board": "eq.tw_main"})
+    prev = store.select("tw_scores", {"select": cols, "as_of": f"eq.{dates[1]}", "board": "eq.tw_main"}) if len(dates) > 1 else []
+    try:
+        names = {r["ticker"]: r.get("name") for r in store.select("tw_entities", {"select": "ticker,name", "ticker": "in.(" + ",".join(r["ticker"] for r in cur) + ")"})} if cur else {}
+    except Exception:  # noqa: BLE001
+        names = {}
+    for r in cur + prev:
+        r["name"] = names.get(r["ticker"]) or ""
+    wt, wp = {}, {}
+    tickers = sorted(set(watch) | {a["ticker"] for a in alerts})
+    if tickers:
+        lst = "in.(" + ",".join(tickers) + ")"
+        wt = {r["ticker"]: r for r in store.select("tw_scores", {"select": cols, "as_of": f"eq.{dates[0]}", "ticker": lst})}
+        if len(dates) > 1:
+            wp = {r["ticker"]: r for r in store.select("tw_scores", {"select": cols, "as_of": f"eq.{dates[1]}", "ticker": lst})}
+    fired = check_alerts(alerts, wt)
+    lines = tw_lines(cur, prev, watch_lines(watch, wt, wp, {}))
+    return ({"as_of": str(dates[0])[:10], "lines": lines} if lines else None), fired
+
+
 def run_digest(store, today: dt.date | None = None) -> dict:
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
     line_token, line_user = os.getenv("LINE_CHANNEL_TOKEN"), os.getenv("LINE_USER_ID")
@@ -160,6 +224,10 @@ def run_digest(store, today: dt.date | None = None) -> dict:
         alerts = [a for a in store.select("user_alerts", {"select": "id,ticker,metric,op,value,fired_at"}) if not a.get("fired_at")]
     except Exception as e:  # noqa: BLE001 - missing table / no rows must not stop the digest
         print(f"  digest: watchlist/alerts unavailable ({str(e)[:80]})")
+    tw_watch = [t for t in watch if is_tw(t)]
+    watch = [t for t in watch if not is_tw(t)]
+    tw_alerts = [a for a in alerts if is_tw(a.get("ticker"))]
+    alerts = [a for a in alerts if not is_tw(a.get("ticker"))]
     names = sorted(set(watch) | {a["ticker"] for a in alerts})
     if names:
         lst = "in.(" + ",".join(names) + ")"
@@ -167,7 +235,13 @@ def run_digest(store, today: dt.date | None = None) -> dict:
         if len(dates) > 1:
             wp = {r["ticker"]: r for r in store.select("scores", {"select": cols, "as_of": f"eq.{dates[1]}", "ticker": lst})}
     fired = check_alerts(alerts, wt)
-    text = compose(cur, prev, smart, raises, str(dates[0])[:10], watch_lines(watch, wt, wp, smart), fired)
+    tw, tw_fired = None, []
+    try:
+        tw, tw_fired = taiwan_section(store, today, tw_watch, tw_alerts)
+    except Exception as e:  # noqa: BLE001 - Taiwan is a bonus: never block the US digest
+        print(f"  digest: taiwan section skipped ({str(e)[:100]})")
+    fired = fired + tw_fired
+    text = compose(cur, prev, smart, raises, str(dates[0])[:10], watch_lines(watch, wt, wp, smart), fired, tw)
     if not text:
         print("  digest: nothing new")
         return {"sent": False, "reason": "nothing new"}
