@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from . import config as cfg
+from .health import StageFailure
 
 ARCHIVES = "https://www.sec.gov/Archives/edgar"
 OFFERING_FORMS = {"C", "C/A"}
@@ -158,7 +159,8 @@ def run_formc(store, today: dt.date | None = None) -> dict:
     today = today or dt.date.today()
     s = requests.Session()
     s.headers.update(cfg.sec_headers())
-    stats = {"days_ok": 0, "days_missing": 0, "listed": 0, "new": 0, "parsed": 0, "failed": 0}
+    stats = {"days_ok": 0, "days_missing": 0, "days_failed": 0, "listed": 0,
+             "new": 0, "parsed": 0, "failed": 0, "warnings": []}
 
     cutoff = (today - dt.timedelta(days=cfg.FORMC_DAYS_BACK + 7)).isoformat()
     known = {r["accession"] for r in store.select("fundraises", {"select": "accession", "filed_at": f"gte.{cutoff}"})}
@@ -168,7 +170,11 @@ def run_formc(store, today: dt.date | None = None) -> dict:
         day = today - dt.timedelta(days=back)
         if day.weekday() >= 5:
             continue
-        r = _get(s, _daily_index_url(day))
+        try:
+            r = _get(s, _daily_index_url(day))
+        except requests.RequestException:
+            stats["days_failed"] += 1
+            continue
         if r is None:  # holiday, or EDGAR hasn't published that day yet
             stats["days_missing"] += 1
             continue
@@ -178,7 +184,7 @@ def run_formc(store, today: dt.date | None = None) -> dict:
     filings = [f for f in filings if f["form_type"] in OFFERING_FORMS]
     stats["listed"] = len(filings)
     if stats["days_ok"] == 0:
-        raise RuntimeError("EDGAR daily index unreachable for every day (blocked or User-Agent rejected?)")
+        raise StageFailure("EDGAR daily index unreachable for every day (blocked or User-Agent rejected?)", stats)
 
     rows = []
     for f in filings:
@@ -208,6 +214,14 @@ def run_formc(store, today: dt.date | None = None) -> dict:
         store.upsert("fundraises", rows, "accession")
     stats.update(_run_updates(store, s, updates, cutoff))
     print(f"  form C: {stats}")
+    if not stats["days_ok"]:
+        raise StageFailure("No SEC daily index could be read.", stats)
+    if stats["new"] and not stats["parsed"]:
+        raise StageFailure("All new Form C filings failed to download or parse.", stats)
+    if stats.get("cu_failed") or stats.get("cu_unavailable"):
+        stats["warnings"].append("SEC: some Form C-U progress updates could not be read")
+    if stats["failed"] or stats["days_failed"]:
+        stats["warnings"].append(f"SEC: {stats['days_failed']} indexes and {stats['failed']} filings failed")
     return stats
 
 
@@ -221,6 +235,7 @@ def _run_updates(store, session, updates: list[dict], cutoff: str) -> dict:
         known = {r["accession"] for r in store.select("fundraise_updates", {"select": "accession", "filed_at": f"gte.{cutoff}"})}
     except Exception as e:  # noqa: BLE001 - table may not exist yet; offerings must not fail because of it
         print(f"  form C-U skipped ({str(e)[:100]})")
+        out["cu_unavailable"] = True
         return out
     rows = []
     for f in updates:

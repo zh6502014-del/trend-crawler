@@ -9,6 +9,8 @@ import json
 import math
 import os
 import time
+import copy
+import uuid
 
 import requests
 
@@ -46,6 +48,24 @@ def _normalise(rows: list[dict]) -> list[dict]:
             if k not in keys:
                 keys.append(k)
     return [{k: r.get(k) for k in keys} for r in rows]
+
+
+def publication(as_of, entities, signals, scores, series, metadata):
+    batch_id = str(uuid.uuid4())
+    groups = [{r["ticker"]: clean(r) for r in rows} for rows in (entities, signals, scores, series)]
+    ent, sig, sc, px = groups
+    if not sc or set(ent) != set(sc) or set(sig) != set(sc) or not set(px) <= set(sc):
+        raise ValueError("Publication requires matching entities, signals and scores")
+    if any(len(group) != len(rows) for group, rows in zip(groups, (entities, signals, scores, series))):
+        raise ValueError("Duplicate ticker in publication")
+    day = clean(as_of)
+    if any(r["as_of"] != day for r in [*sig.values(), *sc.values()]):
+        raise ValueError("Publication dates do not match")
+    batch = {"id": batch_id, "as_of": day, "row_count": len(sc), "metadata": metadata,
+             "created_at": utcnow().isoformat(), "status": "staging"}
+    rows = [{"batch_id": batch_id, "ticker": t, "entity": ent[t], "signal": sig[t],
+             "score": {**sc[t], "batch_id": batch_id}, "prices": px.get(t)} for t in sc]
+    return clean(batch), rows
 
 
 class Supabase:
@@ -118,6 +138,19 @@ class Supabase:
         params = {k: f"eq.{v}" for k, v in match.items()}
         self._req("PATCH", f"/{table}", params=params, data=json.dumps(clean(values), allow_nan=False))
 
+    def delete(self, table, params):
+        if not params:
+            raise ValueError("A delete filter is required")
+        self._req("DELETE", f"/{table}", params=params)
+
+    def publish_public(self, as_of, entities, signals, scores, series, metadata):
+        batch, rows = publication(as_of, entities, signals, scores, series, metadata)
+        self.upsert("publication_batches", [batch], "id")
+        self.upsert("publication_rows", rows, "batch_id,ticker", chunk=100)
+        # Retries use the same batch ID; the database function is idempotent.
+        self._req("POST", "/rpc/publish_public_batch", data=json.dumps({"p_batch_id": batch["id"]}))
+        return batch["id"]
+
 
 class MemoryStore:
     """Same interface, no network. Used by --dry-run and the tests."""
@@ -134,7 +167,56 @@ class MemoryStore:
         return len(rows)
 
     def select(self, table, params=None, page=1000):
-        return list(self.tables.get(table, {}).values())
+        rows = list(self.tables.get(table, {}).values())
+        params = params or {}
+        for key, value in params.items():
+            if key in ("select", "order", "limit", "and"):
+                continue
+            rows = [r for r in rows if self._matches(r.get(key), value)]
+        if "and" in params:
+            for condition in params["and"].strip("()").split(","):
+                key, condition = condition.split(".", 1)
+                rows = [r for r in rows if self._matches(r.get(key), condition)]
+        if params.get("order"):
+            for order in reversed(params["order"].split(",")):
+                key, _, direction = order.partition(".")
+                rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=direction == "desc")
+        if "limit" in params:
+            rows = rows[:int(params["limit"])]
+        return copy.deepcopy(rows)
+
+    @staticmethod
+    def _matches(value, condition):
+        op, _, other = str(condition).partition(".")
+        if value is None:
+            return False
+        value = str(value)
+        return {"eq": value == other, "gte": value >= other, "lte": value <= other,
+                "gt": value > other, "lt": value < other}.get(op, False)
+
+    def delete(self, table, params):
+        if not params:
+            raise ValueError("A delete filter is required")
+        self.tables[table] = {k: r for k, r in self.tables.get(table, {}).items()
+                              if not all(self._matches(r.get(col), value) for col, value in params.items())}
+
+    def publish_public(self, as_of, entities, signals, scores, series, metadata):
+        batch, rows = publication(as_of, entities, signals, scores, series, metadata)
+        # Construct the entire replacement before swapping state, like the SQL transaction.
+        published = self.select("publication_batches", {"status": "eq.published"})
+        if published and batch["as_of"] < max(r["as_of"] for r in published):
+            raise ValueError("Price date is older than the current published board")
+        staged = MemoryStore()
+        staged.tables = copy.deepcopy(self.tables)
+        staged.delete("signals", {"as_of": f"eq.{batch['as_of']}"})
+        staged.delete("scores", {"as_of": f"eq.{batch['as_of']}"})
+        staged.upsert("entities", entities, "ticker")
+        staged.upsert("signals", signals, "ticker,as_of")
+        staged.upsert("scores", [r["score"] for r in rows], "ticker,as_of")
+        staged.upsert("price_series", series, "ticker")
+        staged.upsert("publication_batches", [{**batch, "status": "published", "published_at": utcnow().isoformat()}], "id")
+        self.tables = staged.tables
+        return batch["id"]
 
     def insert(self, table, row):
         self._id += 1

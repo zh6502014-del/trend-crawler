@@ -23,6 +23,7 @@
     <div class="top-right">
       <div id="status" class="pill" hidden><span class="dot"></span><span id="status-text"></span></div>
       <button id="signout" class="btn ghost" hidden>登出</button>
+      <button id="reload" class="btn ghost" type="button" hidden>重新載入</button>
     </div>
   </header>
 
@@ -102,6 +103,7 @@
 
       <p id="quality" class="muted quality" role="note"></p>
       <div id="banner" class="banner" hidden></div>
+      <section id="source-status" class="source-status" aria-label="資料來源狀態" aria-live="polite"></section>
 
       <section class="board glass strong">
         <div id="tbl-stock"></div>
@@ -145,7 +147,7 @@
   </main>
 
   <footer>
-    <p class="muted">研究線索，不是投資建議。資料來自 Massive、SEC EDGAR 與 Hacker News，可能延遲或有誤，請回到原始來源確認。</p>
+    <p class="muted">研究線索，不是投資建議。資料來自 Massive、SEC EDGAR 與 Hacker News，可能延遲或有誤。來源日期與缺漏請見上方狀態。</p>
   </footer>
 
   <div id="scrim" class="scrim" hidden></div>

@@ -38,6 +38,11 @@ jobs:
 
       - run: pip install -r crawler/requirements.txt
 
+      - name: Verify crawler before using production credentials
+        run: |
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
       - name: Run crawler
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -49,6 +54,7 @@ jobs:
           LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          PRICE_SOURCE: ${{ vars.PRICE_SOURCE || 'massive' }}
           ONLY: ${{ inputs.only }}
           FULL_REFRESH: ${{ inputs.full_refresh && '1' || '' }}
         run: python -m crawler.run

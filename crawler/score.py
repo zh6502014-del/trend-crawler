@@ -52,6 +52,8 @@ def quality_margin(r: pd.Series):
 
 def build_flags(r: pd.Series) -> list[str]:
     f: list[str] = []
+    if r.get("fundamentals_stale") is True or r.get("fundamentals_stale") == 1:
+        f.append("stale_fundamentals")
     if pd.notna(r.get("runway_months")) and r["runway_months"] < cfg.RUNWAY_MONTHS_WARN:
         f.append("short_runway")
     if pd.notna(r.get("profit_margin")) and r["profit_margin"] < cfg.DEEP_LOSS_MARGIN:

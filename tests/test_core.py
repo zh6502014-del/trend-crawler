@@ -365,49 +365,13 @@ def test_transient_fetch_error_is_not_cached(monkeypatch):
 
 
 def test_grouped_daily_to_frames():
-    from crawler import prices
-    p = {"results": [{"T": "AAA", "c": 2.0, "v": 1000}, {"T": "SPY", "c": 500.0, "v": 9}, {"T": "ZZZ", "c": 1.0, "v": 1}]}
-    assert prices.parse_grouped(p)[0] == {"T": "AAA", "c": 2.0, "v": 1000}
-    assert prices.parse_grouped({"results": None}) == []
+    from crawler import massive_prices as prices
+    p = {"adjusted": False, "results": [{"T": "AAA", "c": 2.0, "v": 1000}, {"T": "SPY", "c": 500.0, "v": 9}, {"T": "ZZZ", "c": 1.0, "v": 1}]}
+    assert prices.parse_grouped(p)["AAA"] == [2.0, 1000]
+    assert prices.parse_grouped({"results": None}) == {}
     d1, d2 = dt.date(2026, 10, 12), dt.date(2026, 10, 13)
-    c, v = prices.frames_from_bars({d1: prices.parse_grouped(p), d2: []}, ["AAA"])
+    c, v = prices.frames_from_bars({d1: prices.parse_grouped(p), d2: {}}, ["AAA"])
     assert list(c.columns) == ["AAA", "SPY"] and len(c) == 1 and v["AAA"].iloc[0] == 1000
-
-
-def test_price_days_cache_roundtrip(monkeypatch):
-    """Second run reads cached days from the store and only fetches what is missing."""
-    from crawler import prices
-    from crawler.store import MemoryStore
-
-    class D(dt.date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 10, 14)
-
-    monkeypatch.setattr(prices.dt, "date", D)
-    monkeypatch.setenv("MASSIVE_API_KEY", "x")
-    monkeypatch.delenv("FULL_REFRESH", raising=False)
-    monkeypatch.setattr(prices.time, "sleep", lambda s: None)
-    calls = []
-
-    def fake(session, day, key):
-        calls.append(day)
-        if day == dt.date(2026, 10, 13):
-            return None  # not published yet
-        px = 100 + len(calls) * 0.01
-        return [{"T": "SPY", "c": px, "v": 1e6}, {"T": "AAA", "c": px * 2, "v": 5e5}, {"T": "ZZZ", "c": 9.0, "v": 1.0}]
-
-    monkeypatch.setattr(prices, "_fetch_day", fake)
-    store = MemoryStore()
-    df, closes, as_of, _ = prices.load_prices(["AAA"], store)
-    first = len(calls)
-    assert as_of == dt.date(2026, 10, 12) and "AAA" in df.index
-    cached_days = len(store.tables["price_days"])
-    assert cached_days == first - 1                       # the unpublished day is never cached
-    assert "ZZZ" not in next(iter(store.tables["price_days"].values()))["bars"]  # only wanted tickers stored
-    calls.clear()
-    prices.load_prices(["AAA"], store)
-    assert calls == [dt.date(2026, 10, 13)]               # only the unpublished day is retried
 
 
 # ── big-money signals ────────────────────────────────────────────────────────

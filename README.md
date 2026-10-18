@@ -6,7 +6,8 @@
 
 ```
 GitHub Actions（每個交易日收盤後）
-   ├─ yfinance          價量與財報   ┐
+   ├─ Massive           價量         ┐
+   ├─ SEC companyfacts  財報         │
    ├─ Hacker News API   社群關注度   ├─ 計分 ─▶ Supabase ─▶ docs/ 靜態頁（GitHub Pages）
    └─ SEC EDGAR Form C  Reg CF 募資案 ┘
 ```
@@ -21,9 +22,10 @@ GitHub Actions（每個交易日收盤後）
 
 **2. GitHub**
 1. 把整個資料夾推到一個 repo。
-2. Settings → Secrets and variables → Actions，新增三個 secret：
+2. Settings → Secrets and variables → Actions，新增以下 secret：
    - `SUPABASE_URL`：Project URL
    - `SUPABASE_SERVICE_KEY`：service_role key（只放這裡，永遠不要放進網頁）
+   - `MASSIVE_API_KEY`：Massive 價格 API 金鑰
    - `SEC_USER_AGENT`：`你的名字 你的信箱@example.com`（SEC 規定要留聯絡方式，否則會擋）
 3. Settings → Pages，Source 選 Deploy from a branch，資料夾選 `/docs`。
 
@@ -31,7 +33,7 @@ GitHub Actions（每個交易日收盤後）
 編輯 `docs/config.js`，填入 Project URL 和 **anon** key。到 Supabase → Authentication → URL Configuration，把 Site URL 設成你的 GitHub Pages 網址（登入連結才會導回來）。
 
 **4. 第一次執行**
-GitHub → Actions → daily-crawl → Run workflow，勾選 `full_refresh`。第一次要抓所有候選股的財報，大約 15 到 40 分鐘。之後每天只更新一週以上沒更新的部分，約幾分鐘。
+GitHub → Actions → daily-crawl → Run workflow，勾選 `full_refresh`。第一次會建立約 400 個日曆日的價格快取，並更新候選股財報；免費 API 的請求間隔至少 13 秒，初次價格載入約需一小時，財報另計。後續只抓缺少的價格日期與到期財報。
 
 跑完打開 Pages 網址，輸入 Email，點信裡的連結登入。
 
@@ -43,14 +45,14 @@ GitHub → Actions → daily-crawl → Run workflow，勾選 `full_refresh`。�
 
 | 項目 | 看什麼 | 來源 |
 |---|---|---|
-| 成長 | 營收年增、6 個月相對 SPY 的強度（都用當天全體的百分位） | yfinance |
-| 驗證 | 連續幾季營收季增、毛利率 | yfinance |
-| 進場 | 日均成交額、市值落在小資金買得到的範圍 | yfinance |
-| 擁擠 | 分析師人數、機構持股、Hacker News 近 30 天提及。**越高越被扣分** | yfinance、HN |
+| 成長 | 營收年增、6 個月相對 SPY 的強度（都用當天全體的百分位） | Massive、SEC |
+| 驗證 | 連續幾季營收季增、毛利率；金融業改用淨利率 | SEC |
+| 進場 | 日均成交額、市值落在小資金買得到的範圍 | Massive、SEC |
+| 擁擠 | Hacker News 近 30 天提及與日均成交額。**越高越被扣分** | Massive、HN |
 
 用幾何平均（相乘）是刻意的：任何一項接近零，總分就接近零，對應「要嘛各方面都成立，要嘛不值得看」。
 
-通過市值、成交量、資料完整度門檻的進**主榜**，其餘進**觀察清單**。風險標記（現金跑道短、虧損深、負債高、股本稀釋、成交薄、市值極小、已擁擠、資料不足）不影響分數，只提醒你。
+通過市值、成交量、資料完整度門檻、分數最高的前 150 檔進**主榜**，其餘進**觀察清單**。風險標記（現金跑道短、虧損深、負債高、股本稀釋、成交薄、市值極小、已擁擠、資料不足）不影響分數，只提醒你。
 
 所有門檻與權重都在 `crawler/config.py`，不用動其他程式。
 
@@ -58,9 +60,9 @@ GitHub → Actions → daily-crawl → Run workflow，勾選 `full_refresh`。�
 
 - **掛掉會通知你**：任何階段失敗，Actions 會開一個 `crawler-failure` issue；頁面頂端也會在資料超過 4 天沒更新時出現警示。
 - **排程不會被停用**：每週一自動 commit 一次心跳檔（GitHub 對久無活動的 repo 會暫停排程，規則請以官方文件為準）。
-- **資料庫大小**：`signals` 與 `scores` 每個交易日各新增約一千多列，粗估一年一百多 MB，Supabase 免費額度（500 MB）大約撐一兩年，實際請看你的用量頁面。這兩張表是回測的根本，不要輕易刪。
-- **換自己的股票池**：放一個 `universe.csv`（欄位 `ticker,name`），把 `UNIVERSE_SOURCE` 設成 `csv`。
-- **本機試跑**：`pip install -r crawler/requirements.txt`，設好環境變數後 `python -m crawler.run --dry-run`（不寫資料庫）。測試：`python -m pytest -q`。
+- **資料庫大小**：`signals`、`scores` 與發布紀錄持續累積；全市場價格快取只保留最近 400 個日曆日。請監看實際儲存用量，勿直接刪除歷史評分。
+- **換自己的股票池**：放一個 `universe.csv`（欄位 `ticker,name,cik`；SEC 基本面需要 CIK），把 `UNIVERSE_SOURCE` 設成 `csv`。
+- **本機試跑**：`pip install -r crawler/requirements.txt`，設好環境變數後 `python -m crawler.run --only public --dry-run`（不寫資料庫，仍會呼叫外部資料來源）。測試：`python -m pytest -q`。
 
 ## 累積 8 週後：第一次回測
 
@@ -90,20 +92,40 @@ from fwd group by 1, 2 order by 1, 2;
 
 解讀時要小心：樣本短、雜訊大；下市的股票之後沒有價格，會被這個查詢排除，讓結果偏樂觀（存活者偏誤）。
 
-## 還沒驗證的地方（請先看這裡）
+## 現有專案升級（2026-10-18）
 
-這個專案在沒有網路的環境寫成。邏輯有離線測試（評分、解析、整條管線搭配假資料、前端搭配假的 Supabase），但**沒有對真實的 Yahoo、SEC、Hacker News、Supabase 跑過**。第一次執行後請檢查：
+這次更新以 GitHub 版本 `5707b08` 為基底，保留台股、金融業淨利率評分、主榜 150 檔限制、大戶訊號、自選筆記、Form C-U、LINE、Telegram 與估值回測。
 
-1. **Form C 欄位**：打開 `fundraises` 表，看營收、現金、截止日是不是有值。SEC 的 XML 標籤名稱我是憑記憶用寬鬆比對寫的，若某欄全空，調整 `crawler/formc.py` 的 `FIELD_PATTERNS`。
-2. **yfinance 會壞**：它是非官方套件，Yahoo 一改版就可能暫時失效。遇到時先升級套件；管線遇到限流會自動停手並保存已抓的進度。
-3. **Hacker News 是粗略的代理**：以公司名稱比對標題，同名或太通用的名字會誤判，多數小型股本來就是零。
-4. **季度財報只有約 5 季**：「連續季增」是相鄰季的比較，不處理季節性。
-5. **百分位是相對的**：分數是和當天股票池比出來的，不是絕對品質。池子整體很弱時，第一名也不一定好。
-6. **第一週資料不完整**：基本面每天最多刷新 400 檔，第一次若沒勾 `full_refresh`，要幾天才會覆蓋完整。
+1. 在部署新版爬蟲前，執行 `supabase/migrations/20261018_reliable_publication.sql`。現有資料庫只需執行這份遷移；`schema.sql` 是完整安裝用。升級保留既有歷史與讀取權限。
+2. 部署更新分支，確認 Actions Secrets 已設定。價格預設仍為 `massive`；可選用 Repository Variable `PRICE_SOURCE=yahoo`，只切換價格來源，基本面仍使用 SEC。
+3. 手動執行 `daily-crawl`，`only=public`。舊的調整價快取會逐日重建為原始價快取；原始價在讀取時統一套用分割事件。中斷後可續跑，不必再次勾選 `full_refresh`。
+4. 確認 `crawl_runs.stats.public.published=true`、`batch_id` 存在，且 `latest_board` 的筆數與該批次 `row_count` 相符，再恢復例行排程。`partial` 可能已有完整發布，但有來源缺漏，請檢查 `warnings`。
+
+遷移後，`latest_board` 只顯示完整發布的批次。首次新版發布完成前榜單會暫時為空，舊歷史仍保留，因此請把遷移與首次執行安排在同一次維護時段。新版價格快取也供績效報表使用；若重建尚未完成，報表會保留上一次結果並回報警告。
+
+- **完整發布**：先上傳暫存列，再由資料庫交易一次發布。上傳不完整或驗證失敗不影響上一份完整榜單；同日重跑會替換當天股票池。
+- **基本面期限**：7 天到期重抓，超過 21 天不再參與評分；期限內沿用舊資料會顯示標記。`FULL_REFRESH=1` 會真正重抓尚未到期的資料。
+- **Hacker News 快取**：成功查詢（包括零筆）保存 24 小時；查詢失敗不當成零筆，也不快取。
+- **可追溯性**：發布紀錄保存評分版本、程式雜湊、設定、股票池與來源狀態，原始評分欄位與來源日期存入 `signals`。
+- **前端**：各來源獨立載入、可重新載入，顯示來源日期與缺漏，並防止跨批次分頁混用。
+
+## 測試與資料限制
+
+```sh
+pip install -r crawler/requirements.txt -r requirements-dev.txt
+python -m pytest -q
+npm install --ignore-scripts
+npx playwright install chromium
+npm test
+```
+
+檢查涵蓋 SEC/台股解析、評分、快取、發布交易與 RLS、介面登入/重試/篩選，以及既有 LINE 指令。測試使用本機資料與模擬服務，不會向使用者發送 LINE 或 Telegram 訊息。真實 API 權限與 Supabase 部署仍需在線上驗證。
+
+Massive 的報酬率包含股票分割調整、不包含股息；Yahoo 選項包含分割與股息調整，切換來源時不能視為相同報酬定義。SEC 財報取得日期也不是財報期間，申報本身可能落後。HN 名稱比對仍可能有同名誤差；百分位分數仍受當日股票池影響。
 
 ## 資料來源與授權
 
-- 價量與財報：Yahoo Finance，透過 yfinance。Yahoo 的條款以個人使用為主，**所以預設是私有模式**（要登入才看得到資料）。若你把 `schema.sql` 改成公開讀取，等於公開散布衍生資料，請先想清楚。
+- 價量：預設 Massive，也可選 Yahoo Finance（yfinance）。基本面：SEC EDGAR companyfacts。預設仍需登入才能讀取；公開資料前請確認各來源授權。
 - 募資案：SEC EDGAR（公開申報）。請維持 `SEC_USER_AGENT`，並不要調高請求頻率。
 - 社群關注度：Hacker News Search API。
 - 前端套件（皆 MIT，已鎖定版本，無需建置）：Tabulator 6.3.0、Chart.js 4.4.4、supabase-js 2.45.4。要再加一層保護，可以替 `docs/index.html` 的三個 script 加上 SRI（`integrity` 屬性）。

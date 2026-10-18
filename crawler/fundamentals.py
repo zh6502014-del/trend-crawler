@@ -194,16 +194,26 @@ def refresh_cache(store, tickers: list[str], now: dt.datetime | None = None, cik
     rows = store.select("fundamentals_cache", {"select": "ticker,fetched_at,data", "order": "ticker"})
     cache = {r["ticker"]: r for r in rows}
     ttl = dt.timedelta(days=cfg.FUNDAMENTALS_TTL_DAYS)
+    max_age = dt.timedelta(days=cfg.FUNDAMENTALS_MAX_AGE_DAYS)
+
+    def fetched_at(r):
+        try:
+            value = dt.datetime.fromisoformat(str(r["fetched_at"]).replace("Z", "+00:00"))
+            return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            return dt.datetime.min.replace(tzinfo=dt.timezone.utc)
 
     def age_key(t: str):
         r = cache.get(t)
         if r is None:
             return (0, "")  # never fetched: first in line
-        fetched = dt.datetime.fromisoformat(str(r["fetched_at"]).replace("Z", "+00:00"))
+        fetched = fetched_at(r)
         return (1, fetched.isoformat()) if now - fetched >= ttl else (2, "")
 
-    queue = sorted((t for t in tickers if age_key(t)[0] < 2), key=age_key)[: cfg.MAX_REFRESH_PER_RUN]
-    stats = {"refreshed": 0, "failed": 0, "aborted_rate_limit": False, "queued": len(queue)}
+    due = sorted((t for t in tickers if cfg.FULL_REFRESH or age_key(t)[0] < 2), key=age_key)
+    queue = due[: cfg.MAX_REFRESH_PER_RUN]
+    stats = {"refreshed": 0, "failed": 0, "aborted_rate_limit": False, "queued": len(queue),
+             "deferred": len(due) - len(queue), "expired": 0, "stale": 0, "missing": 0}
     pending: list[dict] = []
     consecutive_fail = 0
 
@@ -238,5 +248,19 @@ def refresh_cache(store, tickers: list[str], now: dt.datetime | None = None, cik
         time.sleep(cfg.REQUEST_PAUSE)
     flush()
 
-    out = {t: cache[t]["data"] for t in tickers if t in cache and cache[t]["data"].get("ok")}
+    out = {}
+    for t in tickers:
+        entry = cache.get(t)
+        if not entry or not entry["data"].get("ok"):
+            stats["missing"] += 1
+            continue
+        age = now - fetched_at(entry)
+        if age < dt.timedelta(0) or age > max_age:
+            stats["expired"] += 1
+            continue
+        stale = age >= ttl
+        stats["stale"] += int(stale)
+        out[t] = {**entry["data"], "fundamentals_fetched_at": fetched_at(entry).isoformat(),
+                  "fundamentals_age_days": age.days, "fundamentals_source": "sec",
+                  "fundamentals_stale": stale}
     return out, stats

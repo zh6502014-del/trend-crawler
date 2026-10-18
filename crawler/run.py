@@ -10,6 +10,8 @@ import datetime as dt
 import os
 import sys
 import traceback
+import hashlib
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -17,6 +19,7 @@ import pandas as pd
 from . import attention, formc, fundamentals, digest, industry, prices, report, score, smartmoney, universe
 from . import config as cfg
 from .store import MemoryStore, Supabase, utcnow
+from .health import StageFailure
 
 
 def _int(v):
@@ -45,12 +48,15 @@ def _prior_shares(store, as_of: dt.date) -> dict[str, float]:
 
 
 def run_public(store) -> dict:
-    stats: dict = {}
+    stats: dict = {"warnings": []}
     uni = universe.get_universe()
     stats["universe"] = len(uni)
     print(f"universe: {len(uni)} tickers")
 
     px, closes, as_of, _ = prices.load_prices(list(uni["ticker"]), store)
+    stats["prices"] = px.attrs.get("source_stats", {"source": cfg.PRICE_SOURCE, "as_of": as_of.isoformat()})
+    if stats["prices"].get("failed_batches"):
+        stats["warnings"].append(f"Prices: {stats['prices']['failed_batches']} batches failed")
     stats["priced"] = len(px)
     stats["as_of"] = as_of.isoformat()
 
@@ -62,10 +68,12 @@ def run_public(store) -> dict:
     fund, fstats = fundamentals.refresh_cache(store, list(gate.index), ciks=ciks)
     stats["fundamentals"] = {**fstats, "usable": len(fund)}
     print(f"fundamentals: {stats['fundamentals']}")
+    if any(fstats.get(k) for k in ("failed", "expired", "stale", "deferred", "aborted_rate_limit")):
+        stats["warnings"].append("Fundamentals: failed, overdue or deferred refreshes; see source status")
 
     f = pd.DataFrame.from_dict(fund, orient="index")
     if f.empty:
-        raise RuntimeError("No usable fundamentals yet (first run, or the SEC is rate-limiting). Try again later.")
+        raise StageFailure("No usable fundamentals within the maximum cache age.", stats)
     df = gate.join(f, how="inner")
     shares = pd.to_numeric(df["shares_out"], errors="coerce") if "shares_out" in df else pd.Series(np.nan, index=df.index)
     cap = df["price"] * shares  # market cap = today's price x shares on the latest filing cover
@@ -77,13 +85,19 @@ def run_public(store) -> dict:
     df = score.scorable(df)
     stats["scorable"] = len(df)
     if df.empty:
-        raise RuntimeError("Nothing scorable after joining prices and fundamentals.")
+        raise StageFailure("Nothing scorable after joining prices and fundamentals.", stats)
 
     uni_names = dict(zip(uni["ticker"], uni["name"]))
-    names = {t: (n if isinstance(n, str) and n else uni_names.get(t)) for t, n in df["name"].items()}
-    hn = attention.fetch_all({t: n for t, n in names.items() if n})
+    names = {t: (r["name"] if isinstance(r.get("name"), str) and r["name"]
+                 else uni_names.get(t) or t) for t, r in df.iterrows()}
+    hn, hn_times, hstats = attention.fetch_cached(store, names)
+    stats["attention"] = hstats
     df["hn_mentions"] = pd.Series(hn, dtype="float64").reindex(df.index)
-    stats["hn_failed"] = int(df["hn_mentions"].isna().sum())
+    df["hn_fetched_at"] = pd.Series(hn_times, dtype="object").reindex(df.index)
+    stats["hn_failed"] = hstats["failed"]
+    if hstats["failed"]:
+        stats["warnings"].append(f"Hacker News: {hstats['failed']} lookups failed")
+    df["price_source"] = cfg.PRICE_SOURCE
 
     prior = _prior_shares(store, as_of)
     df["dilution"] = [
@@ -106,35 +120,44 @@ def run_public(store) -> dict:
     # ── write ──
     now = utcnow().isoformat()
     ex = dict(zip(uni["ticker"], uni["exchange"])) if "exchange" in uni else {}
-    store.upsert("entities", [
+    entities = [
         {"ticker": t, "name": names.get(t), "sector": ind.get(t, {}).get("sector") or r.get("sector"),
          "industry": ind.get(t, {}).get("industry") or r.get("industry"),
          "exchange": ex.get(t), "updated_at": now}
         for t, r in scored.iterrows()
-    ], "ticker")
+    ]
 
     sig_cols = ["price", "mkt_cap", "dollar_vol", "ret_1m", "ret_3m", "ret_6m", "rs_6m", "dist_high", "rev_yoy",
-                "rev_streak", "gross_margin", "analyst_count", "inst_pct", "hn_mentions", "runway_months", "shares_out"]
-    int_cols = {"rev_streak", "analyst_count", "hn_mentions"}
-    store.upsert("signals", [
+                "rev_streak", "gross_margin", "analyst_count", "inst_pct", "hn_mentions", "runway_months", "shares_out",
+                "quarters", "profit_margin", "debt_to_equity", "dilution", "fundamentals_fetched_at",
+                "fundamentals_age_days", "fundamentals_source", "price_source", "hn_fetched_at"]
+    int_cols = {"rev_streak", "analyst_count", "hn_mentions", "quarters", "fundamentals_age_days"}
+    signals = [
         {"ticker": t, "as_of": as_of,
          **{c: (_int(r.get(c)) if c in int_cols else r.get(c)) for c in sig_cols}}
         for t, r in scored.iterrows()
-    ], "ticker,as_of")
+    ]
 
-    store.upsert("scores", [
+    scores = [
         {"ticker": t, "as_of": as_of, "board": r["board"], "rank": int(r["rank"]), "score": r["score"],
          "growth": r["growth"], "validated": r["validated"], "accessibility": r["accessibility"],
          "attention": r["attention"], "flags": list(r["flags"])}
         for t, r in scored.iterrows()
-    ], "ticker,as_of")
+    ]
 
     top = scored.sort_values("score", ascending=False).head(cfg.PRICE_SERIES_TOP_N).index
-    store.upsert("price_series", [
+    series = [
         {"ticker": t, "updated_at": now,
          "series": [[d.date().isoformat(), round(float(c), 4)] for d, c in closes[t].iloc[-130:].items()]}
         for t in top if t in closes
-    ], "ticker")
+    ]
+    code_hash = hashlib.sha256(Path(score.__file__).read_bytes()).hexdigest()
+    settings = {k: v for k, v in vars(cfg).items() if k.isupper() and isinstance(v, (str, int, float, dict, bool))}
+    metadata = {"scoring_version": cfg.SCORING_VERSION, "scoring_code_sha256": code_hash,
+                "code_revision": os.getenv("GITHUB_SHA", "local"), "settings": settings,
+                "universe": list(uni["ticker"]), "scored_tickers": list(scored.index), "sources": stats}
+    stats["batch_id"] = store.publish_public(as_of, entities, signals, scores, series, metadata)
+    stats["published"] = True
     print(f"wrote {len(scored)} scores ({stats['main']} main, {stats['watch']} watch)")
     return stats
 
@@ -149,6 +172,7 @@ def main(argv=None) -> int:
     run = store.insert("crawl_runs", {"status": "running"})
     stats: dict = {}
     errors: dict = {}
+    failed = set()
     as_of = None
 
     stages = [("public", run_public), ("formc", formc.run_formc), ("smart", smartmoney.run_smart), ("report", report.run_report), ("digest", digest.run_digest)]
@@ -158,14 +182,20 @@ def main(argv=None) -> int:
         print(f"── {name} ──")
         try:
             stats[name] = fn(store)
+            warnings = stats[name].get("warnings", [])
+            stats[name]["status"] = "partial" if warnings else "ok"
+            if warnings:
+                errors[name] = "; ".join(warnings)[:500]
             if name == "public":
                 as_of = stats[name].get("as_of")
         except Exception as e:
             traceback.print_exc()
+            failed.add(name)
+            stats[name] = {**getattr(e, "stats", {}), "status": "failed"}
             errors[name] = f"{type(e).__name__}: {e}"[:500]
 
     ran = [n for n, _ in stages if not args.only or args.only == n]
-    status = "ok" if not errors else ("failed" if len(errors) == len(ran) else "partial")
+    status = "ok" if not errors else ("failed" if len(failed) == len(ran) else "partial")
     store.update("crawl_runs", {"id": run["id"]},
                  {"finished_at": utcnow().isoformat(), "status": status, "as_of": as_of,
                   "stats": stats, "errors": errors or None})

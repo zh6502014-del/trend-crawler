@@ -1,0 +1,14 @@
+{
+  "name": "trend-crawler-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.cjs tests/*.test.mjs",
+    "test:sql": "node --test tests/publication.test.cjs",
+    "test:ui": "node --test tests/dashboard.test.cjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
+    "playwright": "1.62.1"
+  }
+}

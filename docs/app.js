@@ -52,16 +52,31 @@
     high_pledge: { label: '董監設質高', tone: 'warn', help: '董事與監察人持股中，已質押的比例達 30% 以上；股價下跌時可能被迫補繳或賣股。' },
     insider_selling: { label: '內部人申報轉讓', tone: 'warn', help: '內部人申報預定轉讓（可能是賣出、贈與或信託），股數達已發行股數 0.2% 以上。' },
     data_thin: { label: '資料不足', tone: '', help: '季度財報不足四季或缺毛利率（金融業看淨利率），這個分數可信度較低。' },
+    stale_fundamentals: { label: '基本面待更新', tone: 'warn', help: '基本面已超過例行更新期限；更新失敗或仍在排隊，請查看來源日期。' },
   };
   const RISK = new Set(['short_runway', 'deep_loss', 'high_debt', 'dilution']);
 
   const state = {
-    sb: null, started: false, rows: [], raises: [], run: null,
+    sb: null, started: false, loading: false, controlsWired: false, runs: [], loadErrors: {}, rows: [], raises: [], run: null,
     watch: new Map(), tab: 'main', tq: '', tsector: '', tmin: 0, tgrow: false, ttpex: false, tinst: false, reportLoaded: {}, q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
     maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, watchOnly: false, portal: '', soon: false, view: 'all', saved: [],
     stockTable: null, raiseTable: null, stockReady: false, raiseReady: false,
     charts: [], current: null, lastFocus: null,
   };
+  const filterKey = 'trend-crawler.filters.v1';
+  function saveFilters() {
+    const { tab, q, sector, minScore, hideRisk, rq, ropen } = state;
+    try { localStorage.setItem(filterKey, JSON.stringify({ tab, q, sector, minScore, hideRisk, rq, ropen })); } catch {}
+  }
+  function restoreFilters() {
+    try {
+      const s = JSON.parse(localStorage.getItem(filterKey) || '{}');
+      for (const key of ['q', 'sector', 'rq']) if (typeof s[key] === 'string') state[key] = s[key];
+      for (const key of ['hideRisk', 'ropen']) if (typeof s[key] === 'boolean') state[key] = s[key];
+      if (['main', 'watch', 'raise'].includes(s.tab)) state.tab = s.tab;
+      if (isNum(s.minScore)) state.minScore = Math.max(0, Math.min(80, s.minScore));
+    } catch {}
+  }
 
   // ── small UI helpers ────────────────────────────────────────────────────
   function showNotice(html) {
@@ -97,13 +112,19 @@
 
     $('#signout').addEventListener('click', async () => { await state.sb.auth.signOut(); location.reload(); });
     $('#login-form').addEventListener('submit', onLogin);
+    $('#reload').addEventListener('click', () => start(true));
+    restoreFilters();
 
     if (!CFG.REQUIRE_LOGIN) return start();
 
-    state.sb.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN') start(); });
-    state.sb.auth.getSession().then(({ data }) => {
-      if (data.session) start(); else $('#login').hidden = false;
+    state.sb.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN') start();
+      if (event === 'SIGNED_OUT') location.reload();
     });
+    state.sb.auth.getSession().then(({ data, error }) => {
+      if (error) showError(error, '無法讀取登入狀態');
+      if (data?.session) start(); else $('#login').hidden = false;
+    }).catch((e) => { $('#login').hidden = false; showError(e, '無法讀取登入狀態'); });
   }
 
   async function onLogin(ev) {
@@ -132,52 +153,92 @@
     }
   }
 
-  async function start() {
-    if (state.started) return;
+  async function loadBoard(sb) {
+    // A publication may change while pages are loading. Retry instead of mixing batches.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rows = await pageAll((a, b) => sb.from('latest_board').select('*')
+        .order('board').order('rank').order('ticker').range(a, b));
+      const current = await sb.from('latest_board').select('batch_id').limit(1);
+      if (current.error) throw current.error;
+      const id = current.data?.[0]?.batch_id;
+      if ((!rows.length && !current.data?.length) ||
+          (rows.length && rows.every((r) => r.batch_id === id))) return rows;
+    }
+    throw new Error('榜單正在更新，請稍後重新載入');
+  }
+
+  async function start(force = false) {
+    if (state.loading || (state.started && !force)) return;
+    state.loading = true;
     state.started = true;
+    $('#reload').disabled = true;
+    $('#reload').hidden = false;
     $('#login').hidden = true;
     hideNotice();
     if (CFG.REQUIRE_LOGIN) $('#signout').hidden = false;
     $('#app').hidden = false;
+    closeDrawer();
+    state.stockTable?.destroy(); state.raiseTable?.destroy(); state.twTable?.destroy();
+    state.stockTable = state.raiseTable = state.twTable = null;
+    state.stockReady = state.raiseReady = state.twReady = false;
+    state.usQ = null;
     $('#tbl-stock').innerHTML = '<p class="muted" style="padding:28px">載入中…</p>';
 
     try {
       const sb = state.sb;
-      const [rows, raises, runRes] = await Promise.all([
-        pageAll((a, b) => sb.from('latest_board').select('*').order('rank').range(a, b)),
-        pageAll((a, b) => sb.from('latest_fundraises').select('*').order('filed_at', { ascending: false }).range(a, b)),
-        sb.from('crawl_runs').select('status,started_at,finished_at,as_of,errors').order('started_at', { ascending: false }).limit(1),
+      const results = await Promise.allSettled([
+        loadBoard(sb),
+        pageAll((a, b) => sb.from('latest_fundraises').select('*').order('filed_at', { ascending: false }).order('cik').range(a, b)),
+        (async () => {
+          const r = await sb.from('crawl_runs').select('status,started_at,finished_at,as_of,errors,stats')
+            .order('started_at', { ascending: false }).order('id', { ascending: false }).limit(30);
+          if (r.error) throw r.error;
+          return r.data || [];
+        })(),
       ]);
-      state.rows = rows;
+      state.loadErrors = {};
+      const [rows, raises, runs] = results.map((r, i) => {
+        if (r.status === 'fulfilled') return r.value;
+        state.loadErrors[['股票榜單', '募資資料', '執行狀態'][i]] = r.reason?.message || String(r.reason);
+        return [];
+      });
+      state.rows = rows; state.raises = raises; state.runs = runs; state.run = runs[0] || null;
       try {
         const sm = await pageAll((a, b) => sb.from('smart_money').select('*').gt('score', 0).range(a, b));
         const by = new Map(sm.map((x) => [x.ticker, x]));
         rows.forEach((r) => { r.smart = by.get(r.ticker) || null; r.smart_score = r.smart ? r.smart.score : 0; });
-      } catch (e) { rows.forEach((r) => { r.smart = null; r.smart_score = 0; }); }
+      } catch (e) {
+        state.loadErrors['大戶動向'] = e?.message || String(e);
+        rows.forEach((r) => { r.smart = null; r.smart_score = 0; });
+      }
       try {
         const w = await pageAll((a, b) => sb.from('user_watch').select('ticker,note').range(a, b));
         state.watch = new Map(w.map((x) => [x.ticker, x.note || '']));
-      } catch (e) { state.watch = new Map(); }
-      state.raises = raises;
+      } catch (e) { state.watch = new Map(); state.loadErrors['自選清單'] = e?.message || String(e); }
       try {
         state.tw = await pageAll((a, b) => sb.from('tw_latest_board').select('*').order('rank').range(a, b));
-      } catch (e) { state.tw = []; }
-      state.run = runRes.data?.[0] || null;
+      } catch (e) { state.tw = []; state.loadErrors['台股榜單'] = e?.message || String(e); }
     } catch (e) {
       state.started = false;
       $('#app').hidden = true;
       showError(e);
       return;
+    } finally {
+      state.loading = false;
+      $('#reload').disabled = false;
     }
 
     renderStatus();
     renderQuality();
     fillSectors();
     fillPortals();
-    wireControls();
     renderViews();
+    if (!state.controlsWired) { wireControls(); state.controlsWired = true; }
+    $('#f-q').value = state.q; $('#f-sector').value = state.sector;
+    $('#f-min').value = state.minScore; $('#f-min-out').textContent = state.minScore;
+    $('#f-risk').checked = state.hideRisk; $('#r-q').value = state.rq; $('#r-open').checked = state.ropen;
     buildStockTable();
-    setTab('main');
+    setTab(state.tab);
   }
 
   function renderStatus() {
@@ -185,15 +246,16 @@
     const banner = $('#banner');
     const asOf = state.rows[0]?.as_of;
     const run = state.run;
-    const msgs = [];
+    const msgs = Object.entries(state.loadErrors).map(([k, v]) => `${k}載入失敗：${v}。可按「重新載入」重試。`);
     let level = '';
 
-    if (!asOf) {
-      msgs.push('還沒有分數資料。到 GitHub 的 Actions 頁籤，選 daily-crawl，按 Run workflow，勾選 full_refresh，第一次大約需要 15 到 40 分鐘。');
+    if (!asOf && !state.loadErrors['股票榜單']) {
+      msgs.push('尚未有完整發布的榜單。請執行一次資料更新；首次載入所需時間依價格來源與股票數量而定。');
       level = 'warn';
-    } else {
+    } else if (asOf) {
       const age = daysSince(asOf);
-      const rel = run?.finished_at ? new Intl.RelativeTimeFormat('zh-TW', { numeric: 'auto' }).format(-Math.round((Date.now() - new Date(run.finished_at)) / 3600000), 'hour') : '';
+      const published = state.rows[0]?.published_at;
+      const rel = published ? new Intl.RelativeTimeFormat('zh-TW', { numeric: 'auto' }).format(-Math.round((Date.now() - new Date(published)) / 3600000), 'hour') : '';
       $('#status-text').textContent = `資料日期 ${asOf}${rel ? '，' + rel + '更新' : ''}`;
       const stale = age > (CFG.STALE_AFTER_DAYS ?? 4);
       pill.className = 'pill' + (stale ? (age > 2 * (CFG.STALE_AFTER_DAYS ?? 4) ? ' bad' : ' warn') : '');
@@ -210,6 +272,24 @@
       banner.innerHTML = msgs.map(esc).join('<br>');
       banner.hidden = false;
     } else banner.hidden = true;
+    if (!asOf) pill.hidden = true;
+    const publicRun = state.runs.find((r) => r.stats?.public);
+    const formRun = state.runs.find((r) => r.stats?.formc);
+    const health = publicRun?.stats?.public || {};
+    const overdue = state.rows.filter((r) => (r.flags || []).includes('stale_fundamentals')).length;
+    const dated = state.rows.map((r) => r.fundamentals_fetched_at
+      ? Math.max(0, Math.floor((Date.now() - new Date(r.fundamentals_fetched_at)) / 86400000))
+      : r.fundamentals_age_days).filter(isNum);
+    const age = dated.length ? `最久 ${Math.max(...dated)} 天前` : '日期未知';
+    const hnUnknown = state.rows.filter((r) => !isNum(r.hn_mentions)).length;
+    const statusText = (s) => ({ ok: '成功', partial: '部分成功', failed: '失敗' }[s] || '尚無紀錄');
+    const sources = [
+      ['價格', asOf ? `${state.rows[0].price_source || '來源未記錄'} · ${asOf}` : '尚無完整榜單'],
+      ['基本面', `${age} · ${overdue} 檔待更新${health.fundamentals?.expired ? ` · ${health.fundamentals.expired} 檔過期排除` : ''}`],
+      ['Hacker News', `${hnUnknown} 檔無資料${health.attention?.failed ? ` · ${health.attention.failed} 檔查詢失敗` : ''}`],
+      ['SEC 募資', `${statusText(formRun?.stats?.formc?.status)}${formRun?.finished_at ? ' · ' + new Date(formRun.finished_at).toLocaleString('zh-TW') : ''}`],
+    ];
+    $('#source-status').innerHTML = sources.map(([name, value]) => `<div><b>${esc(name)}</b><span>${esc(value)}</span></div>`).join('');
   }
 
   function renderQuality() {
@@ -224,7 +304,8 @@
   function fillPortals() {
     const sel = $('#r-portal');
     const portals = [...new Set(state.raises.map((r) => r.portal).filter(Boolean))].sort();
-    sel.insertAdjacentHTML('beforeend', portals.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join(''));
+    sel.innerHTML = '<option value="">全部平台</option>' + portals.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    sel.value = state.portal;
   }
 
   // ── quick views (built-in + saved in this browser) ──────────────────────
@@ -296,9 +377,11 @@
 
   function fillSectors() {
     const sel = $('#f-sector');
+    sel.innerHTML = '<option value="">全部產業</option>';
     const sectors = [...new Set(state.rows.map((r) => r.sector).filter(Boolean))].sort();
     if (!sectors.length) sel.hidden = true;  // SEC data has no sector: hide an empty filter
     sel.insertAdjacentHTML('beforeend', sectors.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join(''));
+    if (!sectors.includes(state.sector)) state.sector = '';
   }
 
   // ── controls ────────────────────────────────────────────────────────────
@@ -465,6 +548,7 @@
   const tableHeight = () => Math.max(480, window.innerHeight - 290);
 
   function applyFilters() {
+    saveFilters();
     if (state.tab === 'raise') {
       if (!state.raiseReady) return;
       const q = state.rq.trim().toLowerCase();
@@ -810,6 +894,7 @@
   }
 
   function openStock(d) {
+    destroyCharts();
     state.current = d.ticker;
     const diff = isNum(d.score_7d) ? d.score - d.score_7d : null;
     const f = (d.flags || []).filter((x) => FLAGS[x]);
@@ -841,7 +926,7 @@
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
         : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
       <div class="d-section"><h3>分數走勢</h3><div id="chart-score" class="chart-box"><p class="chart-note">載入中…</p></div></div>
-      <div class="d-section"><h3>近半年股價</h3><div id="chart-price" class="chart-box"><p class="chart-note">載入中…</p></div></div>
+      <div class="d-section"><h3 id="price-heading">近半年股價</h3><div id="chart-price" class="chart-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>資料來源</h3>
         <p class="chart-note">營收、毛利、淨利、現金與流通股數：SEC EDGAR 的公開財報資料（以最近一次申報為準，通常比實際晚一到三個月）。股價與成交額：Massive 的收盤資料。市值是股價乘以最近申報封面上的股數，所以可能與市場報價略有差距。點上方「SEC 申報」可以對照原文。</p>
       </div>
@@ -853,13 +938,18 @@
           <div><dt>距 52 週高點</dt><dd>${spct(d.dist_high, 1)}</dd></div>
           <div><dt>現金可撐（虧損中才有）</dt><dd>${isNum(d.runway_months) ? nf(d.runway_months, 0) + ' 個月' : '—'}</dd></div>
           <div><dt>產業</dt><dd>${esc(d.sector || '—')}</dd></div>
+          <div><dt>基本面取得日期</dt><dd>${esc(d.fundamentals_fetched_at?.slice(0, 10) || '未記錄')}</dd></div>
+          <div><dt>評分版本</dt><dd>${esc(d.scoring_version || '未記錄')}</dd></div>
         </dl>
       </div>`;
     showDrawer();
     drawRadar(d);
     renderWatch(d);
     loadSmart(d);
-    loadStockCharts(d.ticker);
+    loadStockCharts(d.ticker).catch((e) => {
+      if (state.current !== d.ticker) return;
+      for (const id of ['#chart-score', '#chart-price']) $(id).innerHTML = `<p class="chart-note">圖表載入失敗：${esc(e?.message || e)}</p>`;
+    });
   }
 
   function renderWatch(d) {
@@ -949,8 +1039,8 @@
   async function loadStockCharts(ticker) {
     const sb = state.sb;
     const [hist, px] = await Promise.all([
-      sb.from('scores').select('as_of,score,growth,validated,accessibility,attention').eq('ticker', ticker).order('as_of').limit(600),
-      sb.from('price_series').select('series').eq('ticker', ticker).maybeSingle(),
+      sb.from('scores').select('as_of,score,growth,validated,accessibility,attention').eq('ticker', ticker).order('as_of', { ascending: false }).limit(600),
+      sb.from('price_series').select('series,updated_at').eq('ticker', ticker).maybeSingle(),
     ]);
     if (state.current !== ticker) return;  // the user already opened something else
 
@@ -961,7 +1051,7 @@
     });
 
     const sbox = $('#chart-score');
-    const h = hist.data || [];
+    const h = [...(hist.data || [])].reverse();
     if (hist.error) sbox.innerHTML = `<p class="chart-note">${esc(hist.error.message)}</p>`;
     else if (h.length < 2) sbox.innerHTML = `<p class="chart-note">歷史資料還在累積，目前只有 ${h.length} 天。</p>`;
     else {
@@ -990,7 +1080,9 @@
 
     const pbox = $('#chart-price');
     const series = px.data?.series;
-    if (!series || series.length < 2) pbox.innerHTML = '<p class="chart-note">沒有價格走勢。只會保存分數前 250 名的走勢。</p>';
+    if (series?.length) $('#price-heading').textContent = `近半年股價（截至 ${series[series.length - 1][0]}）`;
+    if (px.error) pbox.innerHTML = `<p class="chart-note">${esc(px.error.message)}</p>`;
+    else if (!series || series.length < 2) pbox.innerHTML = '<p class="chart-note">沒有價格走勢。只會保存分數前 250 名的走勢。</p>';
     else {
       pbox.innerHTML = '<canvas aria-label="股價走勢圖" role="img"></canvas>';
       state.charts.push(new Chart($('canvas', pbox), {
@@ -1033,6 +1125,7 @@
   }
 
   function openRaise(d) {
+    destroyCharts();
     state.current = d.accession;
     const g = growthOf(d);
     const margin = isNum(d.revenue) && d.revenue > 0 && isNum(d.net_income) ? d.net_income / d.revenue : null;

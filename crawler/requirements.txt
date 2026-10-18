@@ -1,3 +1,4 @@
-pandas>=2.1
-numpy>=1.26
-requests>=2.31
+pandas>=2.1,<4
+numpy>=1.26,<3
+requests>=2.31,<3
+yfinance>=0.2.54,<2  # optional PRICE_SOURCE=yahoo
