@@ -54,7 +54,7 @@
 
   const state = {
     sb: null, started: false, rows: [], raises: [], run: null,
-    watch: new Map(), tab: 'main', q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
+    watch: new Map(), tab: 'main', tq: '', tsector: '', tmin: 0, tgrow: false, ttpex: false, reportLoaded: {}, q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
     maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, watchOnly: false, portal: '', soon: false, view: 'all', saved: [],
     stockTable: null, raiseTable: null, stockReady: false, raiseReady: false,
     charts: [], current: null, lastFocus: null,
@@ -310,6 +310,14 @@
       });
     });
     $$('#market button').forEach((b) => b.addEventListener('click', () => setMarket(b.dataset.market)));
+    $$('#tabs-tw button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+    const tsec = [...new Set((state.tw || []).map((r) => r.sector).filter(Boolean))].sort();
+    $('#t-sector').insertAdjacentHTML('beforeend', tsec.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join(''));
+    $('#t-q').addEventListener('input', (e) => { state.tq = e.target.value; applyTwFilters(); });
+    $('#t-sector').addEventListener('change', (e) => { state.tsector = e.target.value; applyTwFilters(); });
+    $('#t-min').addEventListener('input', (e) => { state.tmin = +e.target.value; $('#t-min-out').textContent = e.target.value; applyTwFilters(); });
+    $('#t-grow').addEventListener('change', (e) => { state.tgrow = e.target.checked; applyTwFilters(); });
+    $('#t-tpex').addEventListener('change', (e) => { state.ttpex = e.target.checked; applyTwFilters(); });
     wireViews();
     $('#r-portal').addEventListener('change', (e) => { state.portal = e.target.value; applyFilters(); });
     $('#r-soon').addEventListener('change', (e) => { state.soon = e.target.checked; applyFilters(); });
@@ -336,25 +344,28 @@
     state.market = m;
     $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === m)));
     $('#tabs-us').hidden = m === 'tw';
-    if (m === 'tw') { if (state.tab !== 'tw') state.lastUs = state.tab; setTab('tw'); } else setTab(state.lastUs || 'main');
+    $('#tabs-tw').hidden = m !== 'tw';
+    if (m === 'tw') { if (state.tab !== 'tw' && state.tab !== 'twreport') state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
   }
 
   function setTab(tab) {
     state.tab = tab;
-    $$('#tabs-us button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-    const rep = tab === 'report' || tab === 'heat';
+    $$('#tabs-us button, #tabs-tw button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+    if (tab === 'tw' || tab === 'twreport') state.twTab = tab;
+    const rep = tab === 'report' || tab === 'heat' || tab === 'twreport';
     const raise = tab === 'raise';
     const tw = tab === 'tw';
-    $('#report').hidden = tab !== 'report';
+    $('#report').hidden = !(tab === 'report' || tab === 'twreport');
     $('#heat').hidden = tab !== 'heat';
     $('.board').hidden = rep;
     $('#count').hidden = rep;
     if (rep) {
-      ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise', '#legend-tw', '#tbl-tw'].forEach((q) => { $(q).hidden = true; });
-      if (tab === 'report') loadReport(); else renderHeat();
+      ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise', '#legend-tw', '#tbl-tw', '#filters-tw'].forEach((q) => { $(q).hidden = true; });
+      if (tab === 'report') loadReport(false); else if (tab === 'twreport') loadReport(true); else renderHeat();
       return;
     }
     $('#tbl-tw').hidden = !tw;
+    $('#filters-tw').hidden = !tw;
     $('#legend-tw').hidden = !tw;
     if (tw) {
       ['#tbl-stock', '#tbl-raise', '#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise'].forEach((q) => { $(q).hidden = true; });
@@ -397,17 +408,18 @@
 
   // ── report card ─────────────────────────────────────────────────────────
   const pct1 = (v) => (isNum(v) ? (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%' : '—');
-  async function loadReport() {
+  async function loadReport(tw = false) {
+    const bn = tw ? '加權指數' : 'SPY';
+    const key = tw ? 'tw' : 'us';
     const box = $('#report-body');
-    if (state.reportLoaded) return;
     let rows = [];
     try {
-      rows = await pageAll((a, b) => state.sb.from('report_card').select('*').order('as_of', { ascending: false }).range(a, b));
+      rows = await pageAll((a, b) => state.sb.from(tw ? 'tw_report_card' : 'report_card').select('*').order('as_of', { ascending: false }).range(a, b));
     } catch (e) { rows = null; }
-    state.reportLoaded = true;
-    if (rows === null) { box.innerHTML = '<p class="muted">成績單的資料表還不存在，請先在 Supabase 執行最新的 schema.sql。</p>'; return; }
+    state.reportLoaded[key] = true;
+    if (rows === null) { box.innerHTML = '<p class="muted">成績單的資料表還不存在，請先在 Supabase 執行最新的 schema' + (tw ? '_tw' : '') + '.sql。</p>'; return; }
     if (!rows.length) {
-      box.innerHTML = '<h3>歷史成績單</h3><p class="muted">還在累積中。每天收盤後記錄主榜前 20 名，滿 5 個與 20 個交易日後，這裡會顯示它們的平均報酬、對比 SPY 的超額報酬，以及打敗 SPY 的比例。第一筆大約要等一週。</p>';
+      box.innerHTML = `<h3>歷史成績單</h3><p class="muted">還在累積中。每天收盤後記錄主榜前 20 名，滿 5 個與 20 個交易日後，這裡會顯示它們的平均報酬、對比 ${bn} 的超額報酬，以及打敗 ${bn} 的比例。第一筆大約要等一週。</p>`;
       return;
     }
     const cards = [5, 20].map((hz) => {
@@ -417,19 +429,19 @@
       const win = r.filter((x) => Number(x.excess) > 0).length / r.length;
       return `<div class="rc-card"><h4>${hz} 個交易日後</h4>
         <div class="rc-big ${avg('excess') >= 0 ? 'up' : 'down'}">${pct1(avg('excess'))}</div>
-        <div class="muted">平均超額報酬（對比 SPY）</div>
-        <ul><li>平均報酬 ${pct1(avg('avg_ret'))}，SPY ${pct1(avg('spy_ret'))}</li>
+        <div class="muted">平均超額報酬（對比 ${bn}）</div>
+        <ul><li>平均報酬 ${pct1(avg('avg_ret'))}，${bn} ${pct1(avg('spy_ret'))}</li>
         ${r.some((x) => x.edge_board != null) ? `<li>對比整個主榜平均（等於隨機選股）：${pct1(r.filter((x) => x.edge_board != null).reduce((a, x) => a + Number(x.edge_board), 0) / r.filter((x) => x.edge_board != null).length)}</li>` : ''}
         ${r.some((x) => x.top10_ret != null) ? `<li>前 10 名平均報酬 ${pct1(r.filter((x) => x.top10_ret != null).reduce((a, x) => a + Number(x.top10_ret), 0) / r.filter((x) => x.top10_ret != null).length)}</li>` : ''}
-        <li>${r.length} 份榜單中，${Math.round(win * 100)}% 贏過 SPY</li>
-        <li>平均每份榜單有 ${Math.round(avg('hit_rate') * 100)}% 的股票贏過 SPY</li></ul></div>`;
+        <li>${r.length} 份榜單中，${Math.round(win * 100)}% 贏過 ${bn}</li>
+        <li>平均每份榜單有 ${Math.round(avg('hit_rate') * 100)}% 的股票贏過 ${bn}</li></ul></div>`;
     }).join('');
     const recent = rows.filter((x) => x.horizon === 20).concat(rows.filter((x) => x.horizon === 5)).slice(0, 40);
     const tr = recent.map((x) => `<tr><td>${esc(x.as_of)}</td><td>${x.horizon} 日</td><td>${pct1(Number(x.avg_ret))}</td><td>${pct1(Number(x.spy_ret))}</td><td class="${Number(x.excess) >= 0 ? 'up' : 'down'}">${pct1(Number(x.excess))}</td><td>${Math.round(Number(x.hit_rate) * 100)}%</td><td>${esc(x.best)} ${pct1(Number(x.best_ret))}<br><span class="muted">${esc(x.worst)} ${pct1(Number(x.worst_ret))}</span></td></tr>`).join('');
     box.innerHTML = `<h3>歷史成績單</h3><p class="muted">每天主榜前 20 名在之後的表現。這是即時紀錄，不是回測：榜單當天就存下，之後不改。樣本少時請別當成結論。</p>
       <div class="rc-grid">${cards}</div>
       <div class="chart-wrap"><canvas id="rc-chart" height="160"></canvas></div>
-      <table class="mini"><thead><tr><th>榜單日</th><th>期間</th><th>平均報酬</th><th>SPY</th><th>超額</th><th>勝率</th><th>最佳 / 最差</th></tr></thead><tbody>${tr}</tbody></table>`;
+      <table class="mini"><thead><tr><th>榜單日</th><th>期間</th><th>平均報酬</th><th>${bn}</th><th>超額</th><th>勝率</th><th>最佳 / 最差</th></tr></thead><tbody>${tr}</tbody></table>`;
     const r20 = rows.filter((x) => x.horizon === 20).slice().reverse();
     const use = r20.length >= 3 ? r20 : rows.filter((x) => x.horizon === 5).slice().reverse();
     if (state.repChart) state.repChart.destroy();
@@ -559,8 +571,7 @@
   const twd = (v) => (isNum(v) ? (v < 0 ? '−NT$' : 'NT$') + compact(Math.abs(v)) : '—');
   function buildTwTable() {
     const rows = (state.tw || []).filter((r) => r.board === 'tw_main');
-    $('#count').textContent = rows.length ? `台股主榜 ${rows.length} 檔` : '台股還沒有資料';
-    if (state.twTable) { state.twTable.redraw(true); return; }
+    if (state.twTable) { state.twTable.redraw(true); applyTwFilters(); return; }
     state.twTable = new Tabulator('#tbl-tw', {
       data: rows,
       index: 'ticker',
@@ -595,6 +606,20 @@
         { title: '產業', field: 'sector', width: 140, responsive: 5, formatter: (c) => esc(c.getValue() || '—') },
       ],
     });
+    state.twTable.on('tableBuilt', () => { state.twReady = true; applyTwFilters(); });
+  }
+
+  function applyTwFilters() {
+    if (!state.twReady) return;
+    const q = state.tq.trim().toLowerCase();
+    state.twTable.setFilter((d) =>
+      (!q || d.ticker.toLowerCase().includes(q) || (d.name || '').toLowerCase().includes(q)) &&
+      (!state.tsector || d.sector === state.tsector) &&
+      (d.score ?? 0) >= state.tmin &&
+      (!state.tgrow || (d.rev_yoy ?? -1) >= 0.3) &&
+      (!state.ttpex || d.exchange === 'TPEx'));
+    const total = (state.tw || []).filter((r) => r.board === 'tw_main').length;
+    $('#count').textContent = `顯示 ${state.twTable.getDataCount('active')} 檔，共 ${total} 檔`;
   }
 
   // ── Reg CF table ────────────────────────────────────────────────────────

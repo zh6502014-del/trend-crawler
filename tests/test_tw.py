@@ -112,3 +112,14 @@ def test_run_tw_writes_tables(monkeypatch):
     stats = tw.run_tw(st)
     assert stats["scorable"] == 60
     assert len(st.select("tw_scores")) == 60 and len(st.select("tw_signals")) == 60 and len(st.select("tw_entities")) == 60
+
+
+def test_report_uses_taiex_benchmark():
+    from crawler.report import compute_report
+    d0, d1 = dt.date(2026, 10, 1), dt.date(2026, 10, 2)
+    closes = {d0: {"_TAIEX": 100.0, **{f"{i}": 10.0 for i in range(30)}},
+              d1: {"_TAIEX": 110.0, **{f"{i}": 12.0 for i in range(30)}}}
+    cohorts = {d0: [str(i) for i in range(10)]}
+    out = compute_report(cohorts, closes, horizons=(1,), boards={d0: [str(i) for i in range(30)]}, bench="_TAIEX")
+    assert len(out) == 1 and out[0]["spy_ret"] == 0.1 and out[0]["avg_ret"] == 0.2 and out[0]["excess"] == 0.1
+    assert compute_report(cohorts, closes, horizons=(1,)) == []  # default benchmark SPY is absent

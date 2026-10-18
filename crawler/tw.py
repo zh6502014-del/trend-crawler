@@ -370,6 +370,11 @@ def run_tw(store, today: dt.date | None = None) -> dict:
          "growth": r["growth"], "validated": r["validated"], "accessibility": r["accessibility"],
          "attention": r["attention"], "flags": list(r["flags"])} for t, r in scored.iterrows()], "ticker,as_of")
     print(f"  tw: wrote {len(scored)} scores ({stats['main']} main)")
+    try:  # the report card is a bonus: never fail the crawl over it (e.g. tw_report_card not created yet)
+        from .report import run_tw_report
+        stats["report"] = run_tw_report(store, today)
+    except Exception as e:  # noqa: BLE001
+        print(f"  tw report skipped: {str(e)[:120]}")
     return stats
 
 

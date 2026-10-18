@@ -15,7 +15,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
   <script defer src="config.js"></script>
-  <script defer src="app.js?v=20261022"></script>
+  <script defer src="app.js?v=20261023"></script>
 </head>
 <body>
   <header class="top glass">
@@ -53,6 +53,23 @@
           <button role="tab" data-tab="raise" aria-selected="false">未上市募資</button>
           <button role="tab" data-tab="heat" aria-selected="false">熱度圖</button>
           <button role="tab" data-tab="report" aria-selected="false">成績單</button>
+        </div>
+
+        <div class="seg glass" id="tabs-tw" role="tablist" aria-label="台股清單" hidden>
+          <button role="tab" data-tab="tw" aria-selected="true">主榜</button>
+          <button role="tab" data-tab="twreport" aria-selected="false">成績單</button>
+        </div>
+
+        <div class="filters" id="filters-tw" hidden>
+          <input id="t-q" class="field glass" type="search" placeholder="搜尋代號或公司" aria-label="搜尋代號或公司">
+          <select id="t-sector" class="field glass" aria-label="產業"><option value="">全部產業</option></select>
+          <label class="field glass range">
+            <span>最低分數</span>
+            <input id="t-min" type="range" min="0" max="60" step="5" value="0">
+            <output id="t-min-out">0</output>
+          </label>
+          <label class="field glass check"><input id="t-grow" type="checkbox"> 營收年增 ≥ 30%</label>
+          <label class="field glass check"><input id="t-tpex" type="checkbox"> 只看上櫃</label>
         </div>
 
         <div class="filters" id="filters-stock">

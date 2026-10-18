@@ -18,7 +18,7 @@ def _d(v) -> dt.date:
     return v if isinstance(v, dt.date) else dt.date.fromisoformat(str(v)[:10])
 
 
-def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS, boards: dict | None = None) -> list[dict]:
+def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS, boards: dict | None = None, bench: str = "SPY") -> list[dict]:
     """cohorts: {as_of: [ticker, ...]}; closes: {day: {ticker: close}} (must include 'SPY').
 
     boards: optional {as_of: [every main-board ticker]}. Its equal-weight return is the "random pick" baseline
@@ -35,9 +35,9 @@ def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS, boards: dict 
             if i + h >= len(days):
                 continue
             c0, c1 = closes[as_of], closes[days[i + h]]
-            if not c0.get("SPY") or not c1.get("SPY"):
+            if not c0.get(bench) or not c1.get(bench):
                 continue
-            spy = c1["SPY"] / c0["SPY"] - 1
+            spy = c1[bench] / c0[bench] - 1
             rets = {t: c1[t] / c0[t] - 1 for t in tickers if c0.get(t) and c1.get(t)}
             if len(rets) < max(3, len(tickers) // 2):
                 continue
@@ -89,4 +89,30 @@ def run_report(store, today: dt.date | None = None) -> dict:
             base = ("as_of", "horizon", "n", "avg_ret", "spy_ret", "excess", "hit_rate", "best", "best_ret", "worst", "worst_ret", "exit_day")
             store.upsert("report_card", [{k: r[k] for k in base} for r in out], "as_of,horizon")
     print(f"  report: {len(cohorts)} cohorts, {len(out)} rows")
+    return {"cohorts": len(cohorts), "rows": len(out)}
+
+
+def run_tw_report(store, today: dt.date | None = None) -> dict:
+    """Same report for the Taiwan board: tw_scores (tw_main) + tw_price_days, benchmark = the TWSE weighted index."""
+    from .tw import BENCH
+    today = today or dt.date.today()
+    lo = (today - dt.timedelta(days=LOOKBACK_DAYS)).isoformat()
+    rows = store.select("tw_scores", {"select": "ticker,as_of,rank", "board": "eq.tw_main", "as_of": f"gte.{lo}"})
+    rows.sort(key=lambda r: (str(r["as_of"]), r["rank"]))
+    cohorts: dict[dt.date, list[str]] = {}
+    boards: dict[dt.date, list[str]] = {}
+    for r in rows:
+        d = _d(r["as_of"])
+        boards.setdefault(d, []).append(r["ticker"])
+        if r["rank"] <= TOP_N:
+            cohorts.setdefault(d, []).append(r["ticker"])
+    if not cohorts:
+        print("  tw report: no score history yet")
+        return {"cohorts": 0, "rows": 0}
+    pd_rows = store.select("tw_price_days", {"select": "day,bars", "day": f"gte.{min(cohorts).isoformat()}"}, page=10)
+    closes = {_d(r["day"]): {t: v[0] for t, v in (r["bars"] or {}).items() if v and v[0] is not None} for r in pd_rows}
+    out = compute_report(cohorts, closes, boards=boards, bench=BENCH)
+    if out:
+        store.upsert("tw_report_card", out, "as_of,horizon")
+    print(f"  tw report: {len(cohorts)} cohorts, {len(out)} rows")
     return {"cohorts": len(cohorts), "rows": len(out)}
