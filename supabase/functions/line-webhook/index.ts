@@ -17,13 +17,28 @@ export const usd = (n) => {
 };
 export const pct = (n, sign = true) => (n == null || isNaN(n) ? "—" : (sign && n > 0 ? "+" : "") + (n * 100).toFixed(0) + "%");
 const num = (n, d = 1) => (n == null || isNaN(n) ? "—" : Number(n).toFixed(d));
+// Taiwan dollars: 1.2 兆 / 350 億 / 980 萬
+export const twd = (n) => {
+  if (n == null || isNaN(n)) return "—";
+  const a = Math.abs(n), sg = n < 0 ? "-" : "";
+  return sg + (a >= 1e12 ? (a / 1e12).toFixed(2) + " 兆" : a >= 1e8 ? (a / 1e8).toFixed(a >= 1e10 ? 0 : 1) + " 億" : a >= 1e4 ? (a / 1e4).toFixed(0) + " 萬" : a.toFixed(0));
+};
+
+// ── markets: US tickers are letters, Taiwan codes are 4–6 digits (+ optional letter) ──
+export const isTw = (t) => /^\d{4,6}[A-Z]?$/.test(String(t || "").toUpperCase());
+const MK = {
+  us: { view: "latest_board", scores: "scores", ent: "entities", main: "main", label: "美股", report: "report_card", bench: "SPY" },
+  tw: { view: "tw_latest_board", scores: "tw_scores", ent: "tw_entities", main: "tw_main", label: "台股", report: "tw_report_card", bench: "大盤" },
+};
+export const mk = (tw) => (tw ? MK.tw : MK.us);
+const EXCH = { TWSE: "上市", TPEx: "上櫃", TPEX: "上櫃" };
 
 // ── data freshness: how many US trading days behind is the data? (weekdays only; holidays are not modelled) ──
-export function dataAge(asOf, now = new Date()) {
+export function dataAge(asOf, now = new Date(), tw = false) {
   const m = String(asOf || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return { label: "資料日期未知", stale: true, lag: null };
   const d0 = Date.UTC(+m[1], +m[2] - 1, +m[3]);
-  const ref = new Date(now.getTime() - 5 * 3600000); // roughly US Eastern
+  const ref = new Date(now.getTime() - (tw ? 8 : 5) * 3600000); // US: roughly Eastern time; TW: Taipei (+8h) minus a 16:00 cut-over
   const d1 = Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate());
   let lag = 0;
   for (let t = d0 + 86400000; t <= d1; t += 86400000) { const w = new Date(t).getUTCDay(); if (w !== 0 && w !== 6) lag++; }
@@ -41,17 +56,19 @@ export const withQuick = (msgs, items) => {
   out[out.length - 1] = { ...out[out.length - 1], quickReply: { items: items.slice(0, 13) } };
   return out;
 };
-const MAIN_QUICK = [qr("今日", "今日"), qr("榜單", "榜單"), qr("自選", "自選"), qr("週報", "週報"), qr("大戶", "大戶"), qr("更多功能", "更多功能")];
+const MAIN_QUICK = [qr("今日", "今日"), qr("榜單", "榜單"), qr("自選", "自選"), qr("週報", "週報"), qr("大戶", "大戶"), qr("台股", "台股"), qr("更多功能", "更多功能")];
+const TW_QUICK = [qr("台股今日", "台股今日"), qr("台股榜單", "台股"), qr("自選", "自選"), qr("台股週報", "台股週報"), qr("台股成績單", "台股成績單"), qr("美股榜單", "榜單")];
 // rich menu cells, left→right, top→bottom. The image (docs/richmenu.png) is drawn by scripts/make_richmenu.py in the same order.
 export const MENU = ["今日", "榜單", "自選", "週報", "大戶", "更多功能"];
-const TICK = "[A-Za-z][A-Za-z.\\-]{0,5}";
+export const MENU_TW = ["台股今日", "台股", "自選", "台股週報", "台股成績單", "更多功能"];
+const TICK = "(?:[A-Za-z][A-Za-z.\\-]{0,5}|\\d{4,6}[A-Za-z]?)";
 // words that start a command, for "did you mean" suggestions
-const COMMAND_WORDS = ["今日", "榜單", "自選", "週報", "大戶", "募資", "成績單", "提醒清單", "額度", "產業", "比較", "說明", "更多功能"];
+const COMMAND_WORDS = ["今日", "榜單", "自選", "週報", "大戶", "台股", "台股今日", "台股週報", "募資", "成績單", "提醒清單", "額度", "產業", "比較", "說明", "更多功能"];
 
 // ── name / alias lookup (stock names in the DB are mostly English; common Chinese names go here) ──
 export const ALIASES = {
   "輝達": "NVDA", "英偉達": "NVDA", "特斯拉": "TSLA", "蘋果": "AAPL", "微軟": "MSFT", "谷歌": "GOOGL", "亞馬遜": "AMZN",
-  "超微": "AMD", "英特爾": "INTC", "網飛": "NFLX", "帕蘭泰爾": "PLTR", "台積電": "TSM", "美光": "MU", "高通": "QCOM",
+  "超微": "AMD", "英特爾": "INTC", "網飛": "NFLX", "帕蘭泰爾": "PLTR", "台積電adr": "TSM", "美光": "MU", "高通": "QCOM",
 };
 export const cleanQuery = (q) => String(q || "").normalize("NFKC").replace(/[*%,()\\]/g, "").trim().slice(0, 30);
 
@@ -63,14 +80,29 @@ export function parseCommand(raw) {
   if (/^(說明|help|\?|指令|選單)$/.test(low)) return { cmd: "help" };
   if (/^(設定選單|setup menu)$/.test(low)) return { cmd: "menu" };
   if (/^(更多功能|功能|工具|more)$/.test(low)) return { cmd: "more" };
-  const dm = t.match(/^(儀表板|dashboard|網頁)\s*([A-Za-z][A-Za-z.\-]{0,5})?$/i);
+  // Taiwan: 台股 / 台股 2 / 台股今日 / 台股週報 / 台股成績單 / 台股產業 半導體 / 台股 2330
+  const twm = t.match(/^(?:台股|tw)(?![a-z])\s*(.*)$/i);
+  if (twm) {
+    const rest = twm[1].trim();
+    const pgm = rest.match(/^(?:榜單|主榜|前十)?\s*(?:第)?\s*(\d{1,2})?\s*(?:頁)?$/);
+    if (pgm) return { cmd: "top", tw: true, page: Math.min(15, Math.max(1, Number(pgm[1] || 1))) };
+    if (/^(今日|今天)$/.test(rest)) return { cmd: "today", tw: true };
+    if (/^(週報|周報|本週)$/.test(rest)) return { cmd: "week", tw: true };
+    if (/^(成績單|成績)$/.test(rest)) return { cmd: "report", tw: true };
+    const ind = rest.match(/^產業\s*(.*)$/);
+    if (ind) return { cmd: "industry", tw: true, q: ind[1].trim() };
+    const inner = parseCommand(rest);
+    if (inner.cmd !== "unknown" && inner.cmd !== "help") return inner;
+    return { cmd: "unknown", text: t };
+  }
+  const dm = t.match(/^(儀表板|dashboard|網頁)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))?$/i);
   if (dm) return { cmd: "dash", ...(dm[2] ? { ticker: dm[2].toUpperCase() } : {}) };
   const pg = low.match(/^(榜單|前十|top|top10|主榜)\s*(?:第)?\s*(\d{1,2})?\s*(?:頁)?$/);
   if (pg) return { cmd: "top", page: Math.min(15, Math.max(1, Number(pg[2] || 1))) };
   if (/^(下一頁|next|更多)$/.test(low)) return { cmd: "top", page: 2 };
   if (/^(自選|我的自選|watch|watchlist)$/.test(low)) return { cmd: "watch" };
   if (/^(大戶|內部人|smart)$/.test(low)) return { cmd: "smart" };
-  let sm = t.match(/^(大戶|內部人|smart)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
+  let sm = t.match(/^(大戶|內部人|smart)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))$/i);
   if (sm) return { cmd: "smart", ticker: sm[2].toUpperCase() };
   if (/^(募資|regcf|reg cf)$/.test(low)) return { cmd: "raise" };
   if (/^(成績單|成績|report)$/.test(low)) return { cmd: "report" };
@@ -78,11 +110,11 @@ export function parseCommand(raw) {
   if (/^(額度|用量|quota)$/.test(low)) return { cmd: "quota" };
   if (/^(今日|今天|today)$/.test(low)) return { cmd: "today" };
   if (/^(週報|周報|本週|week|weekly)$/.test(low)) return { cmd: "week" };
-  let m = t.match(/^(刪提醒|刪除提醒|取消提醒)\s*([A-Za-z][A-Za-z.\-]{0,5})$/);
+  let m = t.match(/^(刪提醒|刪除提醒|取消提醒)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))$/);
   if (m) return { cmd: "delalert", ticker: m[2].toUpperCase() };
-  m = t.match(/^(提醒|alert)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(分數|排名|score|rank)\s*(>=|<=|>|<)\s*(\d+(?:\.\d+)?)$/i);
+  m = t.match(/^(提醒|alert)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))\s*(分數|排名|score|rank)\s*(>=|<=|>|<)\s*(\d+(?:\.\d+)?)$/i);
   if (m) return { cmd: "alert", ticker: m[2].toUpperCase(), metric: /分數|score/i.test(m[3]) ? "score" : "rank", op: m[4], value: Number(m[5]) };
-  m = t.match(/^(提醒|alert)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
+  m = t.match(/^(提醒|alert)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))$/i);
   if (m) return { cmd: "alertmenu", ticker: m[2].toUpperCase() };
   // one or several tickers: 加 NRXS ACOG、TSLA
   m = t.match(new RegExp(`^(加|新增|add|刪|刪除|移除|del|remove)\\s*(${TICK}(?:\\s*[,，、\\s]\\s*${TICK}){0,9})$`, "i"));
@@ -90,18 +122,18 @@ export function parseCommand(raw) {
     const tickers = [...new Set(m[2].split(/[\s,，、]+/).filter(Boolean).map((x) => x.toUpperCase()))];
     return { cmd: /^(加|新增|add)$/i.test(m[1]) ? "add" : "del", ticker: tickers[0], tickers };
   }
-  m = t.match(/^(筆記|note)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*([\s\S]*)$/i);
+  m = t.match(/^(筆記|note)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))\s*([\s\S]*)$/i);
   if (m) return { cmd: "note", ticker: m[2].toUpperCase(), text: m[3].trim() };
   m = t.match(/^(產業|industry)\s*(.*)$/i);
   if (m) return { cmd: "industry", q: m[2].trim() };
-  m = t.match(/^(?:比較|比|compare)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:和|跟|與|vs\.?|,|，|\s)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i)
-    || t.match(/^([A-Za-z][A-Za-z.\-]{0,5})\s*(?:vs\.?|比|對)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
+  m = t.match(/^(?:比較|比|compare)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))\s*(?:和|跟|與|vs\.?|,|，|\s)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))$/i)
+    || t.match(/^((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))\s*(?:vs\.?|比|對)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))$/i);
   if (m) return { cmd: "compare", a: m[1].toUpperCase(), b: m[2].toUpperCase() };
-  m = t.match(/^(?:把|將)?\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:加入?|新增)(?:到)?(?:我的)?自選(?:清單)?$/);
+  m = t.match(/^(?:把|將)?\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))\s*(?:加入?|新增)(?:到)?(?:我的)?自選(?:清單)?$/);
   if (m) return { cmd: "add", ticker: m[1].toUpperCase() };
-  m = t.match(/^(?:把|將)?\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:移出|移除|刪除|刪掉|拿掉)(?:自選)?(?:清單)?$/);
+  m = t.match(/^(?:把|將)?\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))\s*(?:移出|移除|刪除|刪掉|拿掉)(?:自選)?(?:清單)?$/);
   if (m) return { cmd: "del", ticker: m[1].toUpperCase() };
-  m = t.match(/^(?:查|看|看看|stock)?\s*([A-Za-z][A-Za-z.\-]{0,5})\s*(?:怎麼樣|如何|好嗎|呢|嗎|分數|卡片|[?？])?$/i);
+  m = t.match(/^(?:查|看|看看|stock)?\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))\s*(?:怎麼樣|如何|好嗎|呢|嗎|分數|卡片|[?？])?$/i);
   if (m) return { cmd: "stock", ticker: m[1].toUpperCase(), raw: m[1] };
   return { cmd: "unknown", text: t };
 }
@@ -132,7 +164,7 @@ const tapRow = (left, mid, right, tapText) => ({
   contents: [txt(left, { flex: 1, color: "#8a93a6", size: "xs" }), txt(mid, { flex: 4, weight: "bold", color: "#eef1f8" }), txt(right, { flex: 2, align: "end", color: "#eef1f8" })],
 });
 
-const dataLine = (asOf) => { const a = dataAge(asOf); return txt(a.label, { size: "xs", color: a.stale ? "#ee6a7b" : "#8a93a6", margin: "md" }); };
+const dataLine = (asOf, tw = false) => { const a = dataAge(asOf, new Date(), tw); return txt(a.label, { size: "xs", color: a.stale ? "#ee6a7b" : "#8a93a6", margin: "md" }); };
 
 export function deepLink(base, ticker) { return base ? base.replace(/\/?$/, "/") + "#t=" + encodeURIComponent(ticker) : ""; }
 
@@ -179,32 +211,59 @@ export function sparkline(points) {
   return { type: "box", layout: "horizontal", margin: "sm", contents: bars };
 }
 
-const fmtCmp = (label, v) => (v == null ? "—" : label === "營收年增" || label === "6 個月強度" ? pct(v) : label === "市值" ? usd(v) : label === "排名" ? "#" + v : num(v, label === "分數" ? 1 : 0));
-export function compareCard(A, B) {
+const fmtCmp = (label, v, tw = false) => (v == null ? "—" : label === "營收年增" || label === "6 個月強度" ? pct(v) : label === "市值" ? (tw ? twd(v) : usd(v)) : label === "排名" ? "#" + v : num(v, label === "分數" ? 1 : 0));
+export function compareCard(A, B, tw = false) {
   const line = (label, f, hi = true) => {
     const a = f(A), b = f(B);
     const win = a == null || b == null || a === b ? 0 : ((a > b) === hi ? 1 : 2);
     return { type: "box", layout: "horizontal", margin: "sm", contents: [
       txt(label, { color: "#8a93a6", flex: 3, size: "xs" }),
-      txt(fmtCmp(label, a), { flex: 3, align: "end", weight: win === 1 ? "bold" : "regular", color: win === 1 ? "#2fbf8f" : "#eef1f8" }),
-      txt(fmtCmp(label, b), { flex: 3, align: "end", weight: win === 2 ? "bold" : "regular", color: win === 2 ? "#2fbf8f" : "#eef1f8" }),
+      txt(fmtCmp(label, a, tw), { flex: 3, align: "end", weight: win === 1 ? "bold" : "regular", color: win === 1 ? "#2fbf8f" : "#eef1f8" }),
+      txt(fmtCmp(label, b, tw), { flex: 3, align: "end", weight: win === 2 ? "bold" : "regular", color: win === 2 ? "#2fbf8f" : "#eef1f8" }),
     ] };
   };
   const body = [
     { type: "box", layout: "horizontal", contents: [txt("", { flex: 3 }), txt(A.ticker, { flex: 3, align: "end", weight: "bold", size: "lg", color: "#eef1f8" }), txt(B.ticker, { flex: 3, align: "end", weight: "bold", size: "lg", color: "#eef1f8" })] },
     { type: "separator", margin: "md", color: "#2a3142" },
-    line("分數", (r) => r.score), line("排名", (r) => (r.board === "main" ? r.rank : null), false),
+    line("分數", (r) => r.score), line("排名", (r) => (r.board === "main" || r.board === "tw_main" ? r.rank : null), false),
     line("成長", (r) => r.growth), line("驗證", (r) => r.validated), line("進場", (r) => r.accessibility), line("擁擠", (r) => r.attention, false),
     line("營收年增", (r) => r.rev_yoy), line("6 個月強度", (r) => r.rs_6m), line("市值", (r) => r.mkt_cap, false),
   ];
-  if (A.as_of) body.push(dataLine(A.as_of));
+  if (A.as_of) body.push(dataLine(A.as_of, tw));
   return flex(`${A.ticker} vs ${B.ticker}`, bubble(body));
+}
+
+// Taiwan stock card: monthly revenue instead of quarterly, NT$, 上市/上櫃, no smart-money layer
+export function twStockCard(s, extra = {}) {
+  const flags = (s.flags || []).map((f) => FLAGS[f] || f);
+  const delta = s.score_7d != null ? s.score - s.score_7d : null;
+  const body = [
+    { type: "box", layout: "horizontal", contents: [
+      { type: "box", layout: "vertical", flex: 4, contents: [txt(s.ticker + "  " + (s.name || ""), { size: "lg", weight: "bold", color: "#eef1f8" }),
+        txt(["台股", EXCH[s.exchange] || s.exchange, s.sector].filter(Boolean).join(" · "), { size: "xs", color: "#8a93a6" })] },
+      { type: "box", layout: "vertical", flex: 2, contents: [txt(num(s.score), { size: "xxl", weight: "bold", align: "end", color: "#eef1f8" }),
+        txt(s.board === "tw_main" ? "主榜 #" + s.rank : "觀察 #" + s.rank, { size: "xs", align: "end", color: "#8a93a6" })] },
+    ] },
+    ...(extra.spark ? [extra.spark, txt(`近 ${extra.n} 日分數 ${num(extra.first, 0)} → ${num(s.score, 0)}`, { size: "xs", color: "#8a93a6" })] : []),
+    ...(delta != null ? [txt("7 日分數 " + (delta >= 0 ? "+" : "") + num(delta), { size: "xs", color: delta >= 0 ? "#2fbf8f" : "#ee6a7b" })] : []),
+    { type: "separator", margin: "md", color: "#2a3142" },
+    bar("成長", s.growth, COLORS.growth), bar("驗證", s.validated, COLORS.validated),
+    bar("進場", s.accessibility, COLORS.accessibility), bar("擁擠（越高越擠）", s.attention, COLORS.attention),
+    { type: "separator", margin: "md", color: "#2a3142" },
+    row("股價", s.price != null ? "NT$ " + num(s.price, 2) : "—"),
+    row("月營收年增" + (s.ym ? `（${s.ym}）` : ""), pct(s.rev_yoy)), row("累計營收年增", pct(s.rev_cum_yoy)),
+    row("6 個月強度（對大盤）", pct(s.rs_6m)), row("市值", twd(s.mkt_cap)), row("日成交值", twd(s.dollar_vol)),
+    ...(extra.sectorRank ? [row("產業內排名", `第 ${extra.sectorRank[0]} / ${extra.sectorRank[1]}`)] : []),
+    ...(flags.length ? [row("風險", flags.join("、"), { color: "#ee6a7b" })] : []),
+    dataLine(s.as_of, true),
+  ];
+  return flex(`${s.ticker} ${s.name || ""} 分數 ${num(s.score)}`, bubble(body, extra.url ? [link(extra.url, "在儀表板開啟")] : null));
 }
 
 export function topCard(rows, title) {
   const body = [txt(title, { size: "md", weight: "bold", color: "#eef1f8" }), txt("點一列看詳細", { size: "xs", color: "#8a93a6" })];
   rows.forEach((r) => body.push(tapRow("#" + r.rank, r.ticker + "  " + (r.name || "").slice(0, 16), num(r.score), r.ticker)));
-  if (rows[0] && rows[0].as_of) body.push(dataLine(rows[0].as_of));
+  if (rows[0] && rows[0].as_of) body.push(dataLine(rows[0].as_of, String(rows[0].board || "").startsWith("tw")));
   return flex(title, bubble(body));
 }
 
@@ -215,7 +274,7 @@ export function helpText() {
     "【查股票】",
     "NRXS 或 $NRXS　個股卡片",
     "輝達／apple　用名稱找",
-    "比較 NRXS ACOG　兩檔並排",
+    "比較 NRXS ACOG　兩檔並排（台股也可）",
     "",
     "【每天看】",
     "今日　比前一個交易日的變化",
@@ -225,10 +284,15 @@ export function helpText() {
     "",
     "【自選與提醒】",
     "自選　自選股現況",
-    "加 NRXS ACOG／刪 NRXS　可一次多檔",
+    "加 NRXS 2330／刪 NRXS　可一次多檔",
     "筆記 NRXS 內容　寫筆記",
     "提醒 NRXS　點選條件設提醒",
     "提醒清單／刪提醒 NRXS",
+    "",
+    "【台股】",
+    "2330／台積電　台股個股卡片",
+    "台股（台股 2 翻頁）・台股今日・台股週報",
+    "台股成績單・台股產業 半導體",
     "",
     "【其他】",
     "更多功能　募資、成績單、產業、額度、儀表板",
@@ -255,6 +319,7 @@ export function moreCard(dash, oneTime = false) {
     txt("更多功能", { size: "md", weight: "bold", color: "#eef1f8" }),
     pair(btn("募資", "募資"), btn("成績單", "成績單")),
     pair(btn("提醒清單", "提醒清單"), btn("額度", "額度")),
+    pair(btn("台股榜單", "台股"), btn("台股今日", "台股今日")),
     pair(btn("產業分布", "產業"), btn("全部指令", "說明")),
     ...(oneTime ? [txt("儀表板按鈕免登入，1 小時內有效、只能用一次。", { size: "xxs", color: "#8a93a6", margin: "md" })] : []),
   ];
@@ -349,6 +414,13 @@ export function weekSummary(rows, watch) {
 export async function findByName(db, q) {
   const key = cleanQuery(q).toLowerCase();
   if (key.length < 2) return null;
+  const pick = (rows) => rows.length === 1
+    ? run({ cmd: "stock", ticker: rows[0].ticker, noFallback: true }, db, {})
+    : withQuick([topCard(rows, `「${key}」符合 ${rows.length} 檔`)], rows.map((r) => qr(r.ticker + " " + (r.name || "").slice(0, 8), r.ticker)));
+  if (/[\u3400-\u9fff]/.test(key) && !ALIASES[key]) { // Chinese: Taiwan names are Chinese, so look there first
+    const tw = await db.get(`tw_latest_board?name=ilike.*${encodeURIComponent(key)}*&order=score.desc&limit=5`).catch(() => []);
+    if (tw.length) return pick(tw);
+  }
   if (ALIASES[key]) return run({ cmd: "stock", ticker: ALIASES[key], noFallback: true }, db, {});
   const rows = await db.get(`latest_board?name=ilike.*${encodeURIComponent(key)}*&order=rank.asc&limit=5`);
   if (!rows.length) return null;
@@ -369,6 +441,31 @@ export async function dashLink(db, dash, ticker) {
   } catch (_) { return { url: plain, oneTime: false }; }
 }
 
+async function twStock(cmd, db, dash) {
+  const enc = encodeURIComponent, t = cmd.ticker;
+  const rows = await db.get(`tw_latest_board?ticker=eq.${enc(t)}&limit=1`);
+  if (!rows.length) return [{ type: "text", text: `找不到 ${t}。只有已評分的台股查得到（上市櫃普通股，不含 ETF）。` }];
+  const r = rows[0];
+  const hist = await db.get(`tw_scores?ticker=eq.${enc(t)}&order=as_of.desc&limit=14&select=as_of,score`).catch(() => []);
+  const pts = hist.slice().reverse();
+  const extra = { spark: sparkline(pts), n: pts.length, first: pts[0] && pts[0].score };
+  if (r.sector && r.board === "tw_main") {
+    const peers = await db.get(`tw_latest_board?board=eq.tw_main&sector=eq.${enc(r.sector)}&select=ticker&order=score.desc&limit=200`).catch(() => []);
+    const i = peers.findIndex((p) => p.ticker === t);
+    if (i >= 0) extra.sectorRank = [i + 1, peers.length];
+  }
+  let watching = null;
+  try {
+    const uid = await db.ownerId();
+    watching = (await db.get(`user_watch?user_id=eq.${uid}&ticker=eq.${enc(t)}&select=ticker&limit=1`)).length > 0;
+  } catch (_) { /* buttons still work */ }
+  extra.url = (await dashLink(db, dash, t)).url;
+  return withQuick([twStockCard(r, extra)], [
+    watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("台股榜單", "台股"), qr("台股今日", "台股今日"),
+    ...(r.sector ? [qr(("同產業 " + r.sector).slice(0, 20), "台股產業 " + r.sector)] : []),
+  ]);
+}
+
 export async function run(cmd, db, ctx) {
   const dash = env("DASHBOARD_URL");
   const enc = encodeURIComponent;
@@ -385,6 +482,7 @@ export async function run(cmd, db, ctx) {
         ...(d.oneTime ? [txt("免登入，1 小時內有效、只能用一次。", { size: "xs", color: "#8a93a6" })] : [])], [link(d.url, "開啟")]))];
     }
     case "stock": {
+      if (isTw(cmd.ticker)) return twStock(cmd, db, dash);
       const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
       if (!rows.length) {
         const found = cmd.noFallback ? null : await findByName(db, cmd.raw || cmd.ticker);
@@ -414,12 +512,15 @@ export async function run(cmd, db, ctx) {
     }
     case "compare": {
       if (cmd.a === cmd.b) return [{ type: "text", text: "請給兩檔不同的股票。" }];
-      const rows = await db.get(`latest_board?ticker=in.(${enc(cmd.a)},${enc(cmd.b)})`);
+      const tw = isTw(cmd.a);
+      if (tw !== isTw(cmd.b)) return [{ type: "text", text: "美股和台股的分數是各自市場內比出來的，不能直接比。請給同一個市場的兩檔。" }];
+      const rows = await db.get(`${mk(tw).view}?ticker=in.(${enc(cmd.a)},${enc(cmd.b)})`);
       const A = rows.find((r) => r.ticker === cmd.a), B = rows.find((r) => r.ticker === cmd.b);
       if (!A || !B) return [{ type: "text", text: `找不到 ${!A ? cmd.a : cmd.b}。` }];
-      return withQuick([compareCard(A, B)], [qr(cmd.a, cmd.a), qr(cmd.b, cmd.b), qr("榜單", "榜單")]);
+      return withQuick([compareCard(A, B, tw)], [qr(cmd.a, cmd.a), qr(cmd.b, cmd.b), tw ? qr("台股榜單", "台股") : qr("榜單", "榜單")]);
     }
     case "alertmenu": {
+      if (isTw(cmd.ticker)) return [{ type: "text", text: "台股提醒還沒支援（每日摘要目前只看美股）。" }];
       const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
       if (!rows.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有可設定的條件。` }];
       const r = rows[0], t = cmd.ticker, sc = Math.round(r.score);
@@ -430,21 +531,30 @@ export async function run(cmd, db, ctx) {
         opts.map((o) => qr(o, `提醒 ${t} ${o}`)));
     }
     case "top": {
-      const pg = cmd.page || 1, from = (pg - 1) * 10;
-      const rows = await db.get(`latest_board?board=eq.main&order=rank.asc&limit=10&offset=${from}`);
-      if (!rows.length) return withQuick([{ type: "text", text: "沒有更多了。" }], [qr("榜單", "榜單")]);
-      const more = rows.length === 10 && pg < 15 ? [qr("下一頁", "榜單 " + (pg + 1))] : [];
-      return withQuick([topCard(rows, pg === 1 ? "主榜前 10 名" : `主榜第 ${from + 1}–${from + rows.length} 名`)], [...more, ...MAIN_QUICK]);
+      const S = mk(cmd.tw), pg = cmd.page || 1, from = (pg - 1) * 10;
+      const rows = await db.get(`${S.view}?board=eq.${S.main}&order=rank.asc&limit=10&offset=${from}`);
+      const home = cmd.tw ? qr("台股榜單", "台股") : qr("榜單", "榜單");
+      if (!rows.length) return withQuick([{ type: "text", text: "沒有更多了。" }], [home]);
+      const more = rows.length === 10 && pg < 15 ? [qr("下一頁", (cmd.tw ? "台股 " : "榜單 ") + (pg + 1))] : [];
+      const name = cmd.tw ? "台股主榜" : "主榜";
+      return withQuick([topCard(rows, pg === 1 ? `${name}前 10 名` : `${name}第 ${from + 1}–${from + rows.length} 名`)], [...more, ...(cmd.tw ? TW_QUICK : MAIN_QUICK)]);
     }
     case "watch": {
       const uid = await db.ownerId();
       const w = await db.get(`user_watch?user_id=eq.${uid}&select=ticker,note`);
       if (!w.length) return withQuick([{ type: "text", text: "自選是空的。輸入「加 NRXS」開始，可一次加多檔：加 NRXS ACOG。" }], [qr("榜單", "榜單"), qr("今日", "今日")]);
-      const list = w.map((x) => enc(x.ticker)).join(",");
-      const rows = await db.get(`latest_board?ticker=in.(${list})&order=score.desc`);
-      const have = new Set(rows.map((r) => r.ticker));
+      const usW = w.filter((x) => !isTw(x.ticker)), twW = w.filter((x) => isTw(x.ticker));
+      const inList = (xs) => xs.map((x) => enc(x.ticker)).join(",");
+      const [rows, twRows] = await Promise.all([
+        usW.length ? db.get(`latest_board?ticker=in.(${inList(usW)})&order=score.desc`) : Promise.resolve([]),
+        twW.length ? db.get(`tw_latest_board?ticker=in.(${inList(twW)})&order=score.desc`).catch(() => []) : Promise.resolve([]),
+      ]);
+      const have = new Set([...rows, ...twRows].map((r) => r.ticker));
       const missing = w.filter((x) => !have.has(x.ticker)).map((x) => x.ticker);
-      const msgs = [topCard(rows, "自選 " + rows.length + " 檔")];
+      const both = rows.length && twRows.length;
+      const msgs = [];
+      if (rows.length || !twRows.length) msgs.push(topCard(rows, (both ? "美股自選 " : "自選 ") + rows.length + " 檔"));
+      if (twRows.length) msgs.push(topCard(twRows, (both ? "台股自選 " : "自選 ") + twRows.length + " 檔"));
       if (missing.length) msgs.push({ type: "text", text: "今天沒有評分資料：" + missing.join("、") });
       return withQuick(msgs, [qr("今日", "今日"), qr("週報", "週報"), qr("榜單", "榜單"), qr("更多功能", "更多功能")]);
     }
@@ -456,20 +566,26 @@ export async function run(cmd, db, ctx) {
         return withQuick([{ type: "text", text: `已從自選移除 ${list.join("、")}。` }], [qr("自選", "自選")]);
       }
       if (cmd.cmd === "add" && list.length > 1) {
-        const ex = new Set((await db.get(`entities?ticker=in.(${list.map(enc).join(",")})&select=ticker`)).map((r) => r.ticker));
+        const usL = list.filter((x) => !isTw(x)), twL = list.filter(isTw);
+        const got = await Promise.all([
+          usL.length ? db.get(`entities?ticker=in.(${usL.map(enc).join(",")})&select=ticker`) : Promise.resolve([]),
+          twL.length ? db.get(`tw_entities?ticker=in.(${twL.map(enc).join(",")})&select=ticker`).catch(() => []) : Promise.resolve([]),
+        ]);
+        const ex = new Set(got.flat().map((r) => r.ticker));
         const ok = list.filter((x) => ex.has(x)), bad = list.filter((x) => !ex.has(x));
         const now = new Date().toISOString();
         if (ok.length) await db.send("POST", "user_watch?on_conflict=user_id,ticker", ok.map((x) => ({ user_id: uid, ticker: x, updated_at: now })), "resolution=merge-duplicates,return=minimal");
         return withQuick([{ type: "text", text: (ok.length ? `已加入自選：${ok.join("、")}。` : "沒有加入任何股票。") + (bad.length ? `\n找不到：${bad.join("、")}。` : "") }], [qr("自選", "自選")]);
       }
-      const ex = await db.get(`entities?ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`);
+      const ex = await db.get(`${mk(isTw(cmd.ticker)).ent}?ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`);
       if (!ex.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有加入。` }];
       const row = { user_id: uid, ticker: cmd.ticker, updated_at: new Date().toISOString() };
       if (cmd.cmd === "note") row.note = cmd.text;
       await db.send("POST", "user_watch?on_conflict=user_id,ticker", [row], "resolution=merge-duplicates,return=minimal");
-      return withQuick([{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }], [qr("自選", "自選"), qr("設提醒", "提醒 " + cmd.ticker)]);
+      return withQuick([{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }], [qr("自選", "自選"), ...(isTw(cmd.ticker) ? [] : [qr("設提醒", "提醒 " + cmd.ticker)])]);
     }
     case "smart": {
+      if (cmd.ticker && isTw(cmd.ticker)) return withQuick([{ type: "text", text: "台股目前沒有大戶（內部人申報）資料。" }], [qr(cmd.ticker, cmd.ticker)]);
       if (cmd.ticker) {
         const one = await db.get(`smart_money?ticker=eq.${enc(cmd.ticker)}&limit=1`);
         if (!one.length || !(one[0].tags || []).length) return withQuick([{ type: "text", text: `${cmd.ticker} 目前沒有大戶訊號。` }], [qr(cmd.ticker, cmd.ticker)]);
@@ -482,15 +598,16 @@ export async function run(cmd, db, ctx) {
       return [flex("大戶訊號", bubble(body))];
     }
     case "industry": {
+      const S = mk(cmd.tw), hint = cmd.tw ? "台股產業 半導體" : "產業 生技", pre = cmd.tw ? "台股" : "";
       if (!cmd.q) {
-        const rows = await db.get("latest_board?board=eq.main&select=sector&limit=1000");
+        const rows = await db.get(`${S.view}?board=eq.${S.main}&select=sector&limit=1000`);
         const c = {};
         rows.forEach((r) => { if (r.sector) c[r.sector] = (c[r.sector] || 0) + 1; });
         const list = Object.entries(c).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}（${v}）`).join("\n");
-        return [{ type: "text", text: "主榜產業分布：\n" + list + "\n\n輸入「產業 生技」看該產業前 5 名。" }];
+        return [{ type: "text", text: `${pre}主榜產業分布：\n` + list + `\n\n輸入「${hint}」看該產業前 5 名。` }];
       }
-      const rows = await db.get(`latest_board?board=eq.main&sector=ilike.*${enc(cmd.q)}*&order=rank.asc&limit=5`);
-      if (!rows.length) return [{ type: "text", text: `主榜裡沒有符合「${cmd.q}」的產業。輸入「產業」看清單。` }];
+      const rows = await db.get(`${S.view}?board=eq.${S.main}&sector=ilike.*${enc(cmd.q)}*&order=rank.asc&limit=5`);
+      if (!rows.length) return [{ type: "text", text: `${pre}主榜裡沒有符合「${cmd.q}」的產業。輸入「${pre}產業」看清單。` }];
       return [topCard(rows, rows[0].sector + " 前 5 名")];
     }
     case "raise": {
@@ -500,42 +617,53 @@ export async function run(cmd, db, ctx) {
       return [{ type: "text", text: "最近的 Reg CF 募資：\n" + lines.join("\n") }];
     }
     case "report": {
-      const rows = await db.get("report_card?order=as_of.desc,horizon.asc&limit=6");
-      if (!rows.length) return [{ type: "text", text: "成績單還沒有資料，要累積 5 個交易日以上。" }];
-      const lines = rows.map((r) => `${r.as_of}　${r.horizon} 日　平均 ${pct(r.avg_ret)}　SPY ${pct(r.spy_ret)}　超額 ${pct(r.excess)}　勝率 ${pct(r.hit_rate, false)}`);
-      return [{ type: "text", text: "前 20 名之後的表現：\n" + lines.join("\n") }];
+      const S = mk(cmd.tw), pre = cmd.tw ? "台股" : "";
+      const rows = await db.get(`${S.report}?order=as_of.desc,horizon.asc&limit=6`).catch(() => []);
+      if (!rows.length) return [{ type: "text", text: `${pre}成績單還沒有資料，要累積 5 個交易日以上。` }];
+      const lines = rows.map((r) => `${r.as_of}　${r.horizon} 日　平均 ${pct(r.avg_ret)}　${S.bench} ${pct(r.spy_ret)}　超額 ${pct(r.excess)}　勝率 ${pct(r.hit_rate, false)}`);
+      return [{ type: "text", text: `${pre}前 20 名之後的表現：\n` + lines.join("\n") }];
     }
     case "today": {
-      const dates = (await db.get("scores?board=eq.main&rank=eq.1&select=as_of&order=as_of.desc&limit=2")).map((r) => r.as_of);
+      const S = mk(cmd.tw);
+      const dates = (await db.get(`${S.scores}?board=eq.${S.main}&rank=eq.1&select=as_of&order=as_of.desc&limit=2`)).map((r) => r.as_of);
       if (!dates.length) return [{ type: "text", text: "還沒有評分資料。" }];
       const cols = "ticker,board,rank,score";
       const [cur, prev] = await Promise.all([
-        db.get(`scores?as_of=eq.${enc(dates[0])}&board=eq.main&select=${cols}&limit=1000`),
-        dates[1] ? db.get(`scores?as_of=eq.${enc(dates[1])}&board=eq.main&select=${cols}&limit=1000`) : Promise.resolve([]),
+        db.get(`${S.scores}?as_of=eq.${enc(dates[0])}&board=eq.${S.main}&select=${cols}&limit=1000`),
+        dates[1] ? db.get(`${S.scores}?as_of=eq.${enc(dates[1])}&board=eq.${S.main}&select=${cols}&limit=1000`) : Promise.resolve([]),
       ]);
       const uid = await db.ownerId();
-      const w = await db.get(`user_watch?user_id=eq.${uid}&select=ticker`);
+      const w = (await db.get(`user_watch?user_id=eq.${uid}&select=ticker`)).filter((x) => isTw(x.ticker) === !!cmd.tw);
       let wr = { cur: [], prev: [] };
       if (w.length) {
         const list = w.map((x) => enc(x.ticker)).join(",");
-        wr = { cur: await db.get(`scores?as_of=eq.${enc(dates[0])}&ticker=in.(${list})&select=${cols}`),
-               prev: dates[1] ? await db.get(`scores?as_of=eq.${enc(dates[1])}&ticker=in.(${list})&select=${cols}`) : [] };
+        wr = { cur: await db.get(`${S.scores}?as_of=eq.${enc(dates[0])}&ticker=in.(${list})&select=${cols}`),
+               prev: dates[1] ? await db.get(`${S.scores}?as_of=eq.${enc(dates[1])}&ticker=in.(${list})&select=${cols}`) : [] };
       }
-      const sm = {}; (await db.get("smart_money?score=gt.0&select=ticker,tags&limit=500")).forEach((r) => { sm[r.ticker] = r; });
-      const since = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-      const raises = await db.get(`fundraises?filed_at=gte.${since}&form_type=eq.C&select=issuer&limit=6`);
+      const sm = {};
+      let raises = [];
+      if (!cmd.tw) { // smart money and Reg CF are US-only
+        (await db.get("smart_money?score=gt.0&select=ticker,tags&limit=500")).forEach((r) => { sm[r.ticker] = r; });
+        const since = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        raises = await db.get(`fundraises?filed_at=gte.${since}&form_type=eq.C&select=issuer&limit=6`);
+      }
       const lines = todaySummary(cur, prev, wr, sm, raises);
-      return withQuick([{ type: "text", text: `${dataAge(dates[0]).label}${dates[1] ? "（對比 " + String(dates[1]).slice(0, 10) + "）" : ""}\n` + (lines.length ? lines.join("\n") : "沒有明顯變化。") }], [qr("週報", "週報"), qr("自選", "自選"), qr("榜單", "榜單")]);
+      return withQuick([{ type: "text", text: `${cmd.tw ? "台股　" : ""}${dataAge(dates[0], new Date(), !!cmd.tw).label}${dates[1] ? "（對比 " + String(dates[1]).slice(0, 10) + "）" : ""}\n` + (lines.length ? lines.join("\n") : "沒有明顯變化。") }],
+        cmd.tw ? [qr("台股週報", "台股週報"), qr("自選", "自選"), qr("台股榜單", "台股"), qr("美股今日", "今日")] : [qr("週報", "週報"), qr("自選", "自選"), qr("榜單", "榜單"), qr("台股今日", "台股今日")]);
     }
     case "week": {
-      const rows = await db.get("latest_board?board=eq.main&select=ticker,score,score_7d,as_of&limit=1000");
+      const S = mk(cmd.tw);
+      const rows = await db.get(`${S.view}?board=eq.${S.main}&select=ticker,score,score_7d,as_of&limit=1000`);
       const uid = await db.ownerId();
-      const w = new Set((await db.get(`user_watch?user_id=eq.${uid}&select=ticker`)).map((x) => x.ticker));
+      const w = new Set((await db.get(`user_watch?user_id=eq.${uid}&select=ticker`)).map((x) => x.ticker).filter((t) => isTw(t) === !!cmd.tw));
       const lines = weekSummary(rows, w);
-      const age = dataAge(rows[0] && rows[0].as_of).label;
-      return withQuick([{ type: "text", text: lines.length ? "週報（主榜 7 日分數變化）\n" + age + "\n\n" + lines.join("\n\n") : "還沒有 7 日前的資料可以比。" }], [qr("今日", "今日"), qr("自選", "自選"), qr("榜單", "榜單")]);
+      const age = dataAge(rows[0] && rows[0].as_of, new Date(), !!cmd.tw).label;
+      const head = `${cmd.tw ? "台股" : ""}週報（主榜 7 日分數變化）`;
+      return withQuick([{ type: "text", text: lines.length ? head + "\n" + age + "\n\n" + lines.join("\n\n") : "還沒有 7 日前的資料可以比。" }],
+        cmd.tw ? [qr("台股今日", "台股今日"), qr("自選", "自選"), qr("台股榜單", "台股"), qr("美股週報", "週報")] : [qr("今日", "今日"), qr("自選", "自選"), qr("榜單", "榜單"), qr("台股週報", "台股週報")]);
     }
     case "alert": {
+      if (isTw(cmd.ticker)) return [{ type: "text", text: "台股提醒還沒支援（每日摘要目前只看美股）。" }];
       const uid = await db.ownerId();
       const ex = await db.get(`entities?ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`);
       if (!ex.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有設定。` }];
@@ -621,37 +749,69 @@ async function quotaText(fetchFn) {
   } catch (e) { return "查額度失敗：" + String(e).slice(0, 80); }
 }
 
+// Rich menu geometry; scripts/make_richmenu.py draws the images with the same numbers.
+export const MENU_W = 2500, MENU_H = 843, MENU_TAB_H = 170;
+export function menuAreas(cells) {
+  const tabs = [["trend-us", 0], ["trend-tw", MENU_W / 2]].map(([alias, x]) => ({
+    bounds: { x, y: 0, width: MENU_W / 2, height: MENU_TAB_H },
+    action: { type: "richmenuswitch", richMenuAliasId: alias, data: "menu=" + alias.slice(6) },
+  }));
+  const cw = Math.floor(MENU_W / 3), ch = Math.floor((MENU_H - MENU_TAB_H) / 2);
+  return [...tabs, ...cells.map((text, i) => ({
+    bounds: { x: (i % 3) * cw, y: MENU_TAB_H + Math.floor(i / 3) * ch, width: cw, height: ch }, action: { type: "message", text },
+  }))];
+}
+
 async function setupMenu(fetchFn) {
   const auth = { Authorization: "Bearer " + env("LINE_CHANNEL_TOKEN") };
+  const json = { ...auth, "Content-Type": "application/json" };
   const dash = env("DASHBOARD_URL");
   if (!dash) return "缺少 DASHBOARD_URL，無法取得選單圖片。";
-  const img = await fetchFn(dash.replace(/\/?$/, "/") + "richmenu.png");
-  if (!img.ok) return "找不到選單圖片 richmenu.png（" + img.status + "）。";
-  const bytes = new Uint8Array(await img.arrayBuffer());
-  const labels = MENU;
-  const w = 2500, h = 843, cw = Math.floor(w / 3), ch = Math.floor(h / 2);
-  const areas = labels.map((t, i) => ({ bounds: { x: (i % 3) * cw, y: Math.floor(i / 3) * ch, width: cw, height: ch }, action: { type: "message", text: t } }));
-  const c = await fetchFn("https://api.line.me/v2/bot/richmenu", {
-    method: "POST", headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({ size: { width: w, height: h }, selected: true, name: "trend-menu", chatBarText: "選單", areas }),
-  });
-  if (!c.ok) return "建立選單失敗：" + c.status + " " + (await c.text()).slice(0, 200);
-  const { richMenuId } = await c.json();
-  const up = await fetchFn(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, { method: "POST", headers: { ...auth, "Content-Type": "image/png" }, body: bytes });
-  if (!up.ok) return "上傳圖片失敗：" + up.status + " " + (await up.text()).slice(0, 200);
-  const def = await fetchFn(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, { method: "POST", headers: auth });
+  const make = async (name, bar, file, cells, tabs = true) => {
+    const img = await fetchFn(dash.replace(/\/?$/, "/") + file);
+    if (!img.ok) throw new Error(`找不到選單圖片 ${file}（${img.status}）`);
+    const bytes = new Uint8Array(await img.arrayBuffer());
+    const c = await fetchFn("https://api.line.me/v2/bot/richmenu", {
+      method: "POST", headers: json,
+      body: JSON.stringify({ size: { width: MENU_W, height: MENU_H }, selected: true, name, chatBarText: bar, areas: menuAreas(cells).filter((a) => tabs || a.action.type !== "richmenuswitch") }),
+    });
+    if (!c.ok) throw new Error("建立選單失敗：" + c.status + " " + (await c.text()).slice(0, 200));
+    const { richMenuId } = await c.json();
+    const up = await fetchFn(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, { method: "POST", headers: { ...auth, "Content-Type": "image/png" }, body: bytes });
+    if (!up.ok) throw new Error("上傳圖片失敗：" + up.status + " " + (await up.text()).slice(0, 200));
+    return richMenuId;
+  };
+  const alias = async (id, richMenuId) => { // create, or point an existing alias at the new menu
+    const c = await fetchFn("https://api.line.me/v2/bot/richmenu/alias", { method: "POST", headers: json, body: JSON.stringify({ richMenuAliasId: id, richMenuId }) });
+    if (c.ok) return;
+    const u = await fetchFn(`https://api.line.me/v2/bot/richmenu/alias/${id}`, { method: "POST", headers: json, body: JSON.stringify({ richMenuId }) });
+    if (!u.ok) throw new Error(`設定分頁切換失敗（${id}）：` + u.status + " " + (await u.text()).slice(0, 120));
+  };
+  let us, tw;
+  try {
+    // first run: the tab buttons point at aliases that don't exist yet, so park the aliases on tab-less menus first
+    const al = await fetchFn("https://api.line.me/v2/bot/richmenu/alias/list", { headers: auth });
+    const have = new Set(al.ok ? ((await al.json()).aliases || []).map((a) => a.richMenuAliasId) : []);
+    if (!have.has("trend-us")) await alias("trend-us", await make("trend-menu-boot", "選單", "richmenu.png", MENU, false));
+    if (!have.has("trend-tw")) await alias("trend-tw", await make("trend-menu-boot", "選單", "richmenu_tw.png", MENU_TW, false));
+    us = await make("trend-menu", "美股選單", "richmenu.png", MENU);
+    tw = await make("trend-menu-tw", "台股選單", "richmenu_tw.png", MENU_TW);
+    await alias("trend-us", us);
+    await alias("trend-tw", tw);
+  } catch (e) { return String((e && e.message) || e); }
+  const def = await fetchFn(`https://api.line.me/v2/bot/user/all/richmenu/${us}`, { method: "POST", headers: auth });
   if (!def.ok) return "設為預設失敗：" + def.status;
   // remove the menus this bot made before, so repeated setups don't pile up
   let removed = 0;
   try {
     const ls = await fetchFn("https://api.line.me/v2/bot/richmenu/list", { headers: auth });
-    const old = ls.ok ? ((await ls.json()).richmenus || []).filter((m) => m.name === "trend-menu" && m.richMenuId !== richMenuId) : [];
+    const old = ls.ok ? ((await ls.json()).richmenus || []).filter((m) => String(m.name).startsWith("trend-menu") && m.richMenuId !== us && m.richMenuId !== tw) : [];
     for (const m of old) {
       const d = await fetchFn(`https://api.line.me/v2/bot/richmenu/${m.richMenuId}`, { method: "DELETE", headers: auth });
       if (d.ok) removed++;
     }
   } catch (_) { /* cleanup is best-effort */ }
-  return "選單已建立。" + (removed ? `已清掉 ${removed} 個舊選單。` : "");
+  return "選單已建立（美股／台股，點上方分頁切換）。" + (removed ? `已清掉 ${removed} 個舊選單。` : "");
 }
 
 export async function handle(req, fetchFn = fetch) {

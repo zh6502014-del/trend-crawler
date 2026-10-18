@@ -1,7 +1,7 @@
 // Run: node --test tests/line_webhook.test.mjs   (Node 22.18+ strips the .ts types natively)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText, dashLink } from "../supabase/functions/line-webhook/index.ts";
+import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText, dashLink, isTw, twd, MENU_TW, menuAreas, MENU_W, MENU_H, MENU_TAB_H } from "../supabase/functions/line-webhook/index.ts";
 
 const at = (iso) => new Date(iso);
 
@@ -225,5 +225,126 @@ test("stock card and 更多 carry the sign-in link", async () => {
   assert.match(JSON.stringify(more[0]), /只能用一次/);
   const d = await run({ cmd: "dash", ticker: "NRXS" }, db, {});
   assert.match(JSON.stringify(d[0]), /verify\?token=abc/);
+  delete process.env.DASHBOARD_URL;
+});
+
+// ── Taiwan ────────────────────────────────────────────────────────────────
+const twRow = { ticker: "2330", name: "台積電", sector: "半導體業", exchange: "TWSE", board: "tw_main", rank: 3, score: 72.5, score_7d: 70,
+  growth: 60, validated: 70, accessibility: 40, attention: 50, price: 1050, rev_yoy: 0.36, rev_cum_yoy: 0.31, ym: "11509",
+  rs_6m: 0.12, mkt_cap: 2.7e13, dollar_vol: 3.1e10, as_of: "2026-10-16", flags: [] };
+
+test("Taiwan: codes, 台股 commands, money format", () => {
+  assert.ok(isTw("2330") && isTw("00878") && isTw("6488a") && !isTw("NRXS") && !isTw("123"));
+  assert.deepEqual(parseCommand("2330"), { cmd: "stock", ticker: "2330", raw: "2330" });
+  assert.deepEqual(parseCommand("台股"), { cmd: "top", tw: true, page: 1 });
+  assert.deepEqual(parseCommand("台股 3"), { cmd: "top", tw: true, page: 3 });
+  assert.equal(parseCommand("台股今日").tw, true);
+  assert.equal(parseCommand("台股週報").cmd, "week");
+  assert.equal(parseCommand("台股成績單").cmd, "report");
+  assert.deepEqual(parseCommand("台股產業 半導體"), { cmd: "industry", tw: true, q: "半導體" });
+  assert.equal(parseCommand("台股 2330").ticker, "2330");
+  assert.equal(parseCommand("twitter").cmd, "unknown");
+  assert.deepEqual(parseCommand("加 NRXS 2330").tickers, ["NRXS", "2330"]);
+  assert.equal(twd(2.7e13), "27.00 兆"); assert.equal(twd(4.56e9), "45.6 億");
+  for (const t of MENU_TW) assert.notEqual(parseCommand(t).cmd, "unknown", t);
+});
+
+test("Taiwan stock card reads the tw tables and shows NT$ fields", async () => {
+  const asked = [];
+  const db = mkDb({ "tw_latest_board?ticker=eq.2330": [twRow], "tw_latest_board?board=eq.tw_main&sector": [{ ticker: "2454" }, { ticker: "2330" }], "user_watch": [] });
+  const get = db.get; db.get = (p) => { asked.push(p); return get(p); };
+  const out = await run(parseCommand("2330"), db, {});
+  const s = JSON.stringify(out[0]);
+  assert.match(s, /台積電/); assert.match(s, /NT\$ 1050\.00/); assert.match(s, /上市/); assert.match(s, /27\.00 兆/);
+  assert.match(s, /產業內排名/); assert.match(s, /第 2 \/ 2/);
+  assert.ok(!asked.some((p) => p.startsWith("latest_board") || p.startsWith("smart_money")), "must not touch US tables");
+  assert.equal(out[0].quickReply.items[0].action.text, "加 2330");
+  const miss = await run(parseCommand("9999"), mkDb({}), {});
+  assert.match(miss[0].text, /找不到 9999/);
+});
+
+test("Chinese names find Taiwan stocks first; US aliases still work", async () => {
+  const db = mkDb({ "tw_latest_board?name=ilike.*%E5%8F%B0%E7%A9%8D%E9%9B%BB*": [twRow], "tw_latest_board?ticker=eq.2330": [twRow], "user_watch": [] });
+  const out = await findByName(db, "台積電");
+  assert.match(out[0].altText, /^2330/);
+  const nv = await findByName(mkDb({ "latest_board?ticker=eq.NVDA": [{ ...board, ticker: "NVDA", name: "NVIDIA" }] }), "輝達");
+  assert.match(nv[0].altText, /^NVDA/);
+});
+
+test("Taiwan top list, compare and unsupported features", async () => {
+  const top = await run(parseCommand("台股"), mkDb({ "tw_latest_board?board=eq.tw_main": Array.from({ length: 10 }, (_, i) => ({ ...twRow, ticker: String(1101 + i), rank: i + 1 })) }), {});
+  assert.match(top[0].altText, /台股主榜前 10 名/);
+  assert.equal(top[0].quickReply.items[0].action.text, "台股 2");
+  const cmp = await run(parseCommand("比較 2330 2454"), mkDb({ "tw_latest_board?ticker=in.": [twRow, { ...twRow, ticker: "2454", name: "聯發科", mkt_cap: 1.5e12 }] }), {});
+  assert.match(JSON.stringify(cmp[0]), /兆/);
+  const mixed = await run(parseCommand("比較 NRXS 2330"), mkDb({}), {});
+  assert.match(mixed[0].text, /不能直接比/);
+  assert.match((await run(parseCommand("提醒 2330 分數>80"), mkDb({}), {}))[0].text, /還沒支援/);
+  assert.match((await run(parseCommand("大戶 2330"), mkDb({}), {}))[0].text, /沒有大戶/);
+});
+
+test("watchlist splits US and Taiwan", async () => {
+  const db = mkDb({ "user_watch": [{ ticker: "NRXS" }, { ticker: "2330" }], "latest_board?ticker=in.": [board], "tw_latest_board?ticker=in.": [twRow] });
+  const out = await run({ cmd: "watch" }, db, {});
+  assert.equal(out.length, 2);
+  assert.match(out[0].altText, /美股自選 1 檔/); assert.match(out[1].altText, /台股自選 1 檔/);
+});
+
+test("Taiwan today/week/report use the tw tables and the market's own date rule", async () => {
+  const asked = [];
+  const db = mkDb({ "tw_scores?board=eq.tw_main&rank=eq.1": [{ as_of: "2026-10-16" }, { as_of: "2026-10-15" }], "tw_scores?as_of": [twRow], "user_watch": [], "tw_latest_board?board=eq.tw_main": [twRow], "tw_report_card": [] });
+  const get = db.get; db.get = (p) => { asked.push(p); return get(p); };
+  const today = await run(parseCommand("台股今日"), db, {});
+  assert.match(today[0].text, /^台股　資料截至 2026-10-16/);
+  const week = await run(parseCommand("台股週報"), db, {});
+  assert.match(week[0].text, /台股週報/);
+  const rep = await run(parseCommand("台股成績單"), db, {});
+  assert.match(rep[0].text, /台股成績單還沒有資料/);
+  assert.ok(!asked.some((p) => /^(scores|latest_board|smart_money|fundraises|report_card)\?/.test(p)), "must not touch US tables");
+  // TW data from Friday is fresh on Monday morning Taipei, stale by Tuesday evening
+  assert.equal(dataAge("2026-10-16", new Date("2026-10-19T01:00:00Z"), true).stale, false);
+  assert.equal(dataAge("2026-10-16", new Date("2026-10-20T10:00:00Z"), true).stale, true);
+});
+
+test("tabbed rich menus: geometry and switch actions", () => {
+  const a = menuAreas(MENU_TW);
+  assert.equal(a.length, 8);
+  assert.equal(a[0].action.type, "richmenuswitch"); assert.equal(a[1].action.richMenuAliasId, "trend-tw");
+  for (const x of a) {
+    assert.ok(x.bounds.x + x.bounds.width <= MENU_W && x.bounds.y + x.bounds.height <= MENU_H);
+  }
+  assert.equal(a[2].bounds.y, MENU_TAB_H);
+  assert.equal(a[7].action.text, "更多功能");
+});
+
+test("設定選單: first run parks aliases, builds both menus, repoints aliases, cleans old ones", async () => {
+  process.env.DASHBOARD_URL = "https://u.github.io/trend/"; process.env.LINE_CHANNEL_SECRET = "s"; process.env.LINE_USER_ID = "U1";
+  process.env.LINE_CHANNEL_TOKEN = "t"; process.env.SUPABASE_URL = "http://db"; process.env.SUPABASE_SERVICE_ROLE_KEY = "k";
+  const { handle } = await import("../supabase/functions/line-webhook/index.ts");
+  const calls = []; let n = 0; const aliases = {};
+  const ok = (j) => ({ ok: true, status: 200, json: async () => j, text: async () => "", arrayBuffer: async () => new ArrayBuffer(4) });
+  const fetchFn = async (url, opt = {}) => {
+    const m = opt.method || "GET"; calls.push(m + " " + url);
+    if (url.endsWith(".png")) return ok({});
+    if (url.endsWith("/richmenu/alias/list")) return ok({ aliases: [] });
+    if (url.endsWith("/v2/bot/richmenu") && m === "POST") {
+      const b = JSON.parse(opt.body);
+      for (const a of b.areas) if (a.action.type === "richmenuswitch" && !aliases[a.action.richMenuAliasId]) return { ok: false, status: 400, text: async () => "alias not found" };
+      return ok({ richMenuId: "rm" + (++n) });
+    }
+    if (url.endsWith("/richmenu/alias") && m === "POST") { const b = JSON.parse(opt.body); if (aliases[b.richMenuAliasId]) return { ok: false, status: 400, text: async () => "dup" }; aliases[b.richMenuAliasId] = b.richMenuId; return ok({}); }
+    if (/\/richmenu\/alias\/trend-/.test(url)) { aliases[url.split("/").pop()] = JSON.parse(opt.body).richMenuId; return ok({}); }
+    if (url.endsWith("/richmenu/list")) return ok({ richmenus: [{ name: "trend-menu", richMenuId: "old1" }, { name: "trend-menu-boot", richMenuId: "rm1" }, { name: "other", richMenuId: "x" }, ...Object.values(aliases).map((id) => ({ name: "trend-menu", richMenuId: id }))] });
+    if (url.includes("api.line.me/v2/bot/message/reply")) { calls.reply = JSON.parse(opt.body); return ok({}); }
+    return ok({});
+  };
+  const body = JSON.stringify({ events: [{ type: "message", webhookEventId: "menu1", replyToken: "rt", source: { userId: "U1" }, message: { type: "text", text: "設定選單" } }] });
+  const mac = Buffer.from(await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", new TextEncoder().encode("s"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), new TextEncoder().encode(body))).toString("base64");
+  await handle(new Request("http://x", { method: "POST", body, headers: { "x-line-signature": mac } }), fetchFn);
+  assert.match(calls.reply.messages[0].text, /選單已建立（美股／台股/);
+  assert.equal(aliases["trend-us"], "rm3"); assert.equal(aliases["trend-tw"], "rm4");      // repointed to the tabbed menus
+  assert.ok(calls.includes("DELETE https://api.line.me/v2/bot/richmenu/old1") && calls.includes("DELETE https://api.line.me/v2/bot/richmenu/rm1"));
+  assert.ok(!calls.includes("DELETE https://api.line.me/v2/bot/richmenu/x"));
+  assert.ok(calls.includes("POST https://api.line.me/v2/bot/user/all/richmenu/rm3"));
   delete process.env.DASHBOARD_URL;
 });
