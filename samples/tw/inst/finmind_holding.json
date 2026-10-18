@@ -1,0 +1,41 @@
+{
+ "url": "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id=2330&start_date=2026-10-12&end_date=2026-10-16",
+ "http": 200,
+ "bytes": 2183,
+ "sample": {
+  "msg": "success",
+  "status": 200,
+  "data": [
+   {
+    "date": "2026-10-12",
+    "stock_id": "2330",
+    "stock_name": "台積電",
+    "InternationalCode": "TW0002330008",
+    "ForeignInvestmentRemainingShares": 8010032701,
+    "ForeignInvestmentShares": 17922337366,
+    "ForeignInvestmentRemainRatio": 30.88,
+    "ForeignInvestmentSharesRatio": 69.11,
+    "ForeignInvestmentUpperLimitRatio": 100.0,
+    "ChineseInvestmentUpperLimitRatio": 100.0,
+    "NumberOfSharesIssued": 25932370067,
+    "RecentlyDeclareDate": "2026-05-26",
+    "note": ""
+   },
+   {
+    "date": "2026-10-13",
+    "stock_id": "2330",
+    "stock_name": "台積電",
+    "InternationalCode": "TW0002330008",
+    "ForeignInvestmentRemainingShares": 8037151234,
+    "ForeignInvestmentShares": 17895218833,
+    "ForeignInvestmentRemainRatio": 30.99,
+    "ForeignInvestmentSharesRatio": 69.0,
+    "ForeignInvestmentUpperLimitRatio": 100.0,
+    "ChineseInvestmentUpperLimitRatio": 100.0,
+    "NumberOfSharesIssued": 25932370067,
+    "RecentlyDeclareDate": "2026-05-26",
+    "note": ""
+   }
+  ]
+ }
+}

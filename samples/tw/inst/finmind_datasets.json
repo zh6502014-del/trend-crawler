@@ -1,0 +1,8 @@
+{
+ "url": "https://api.finmindtrade.com/api/v4/datasets",
+ "http": 404,
+ "bytes": 22,
+ "sample": {
+  "detail": "Not Found"
+ }
+}
