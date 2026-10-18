@@ -1,0 +1,51 @@
+{
+ "url": "https://www.tpex.org.tw/openapi/v1/tpex_3insti_daily_trading",
+ "http": 200,
+ "bytes": 842326,
+ "sample": [
+  {
+   "Date": "1151016",
+   "SecuritiesCompanyCode": "00411A",
+   "CompanyName": "主動統一前沿科技",
+   "Foreign Investors include Mainland Area Investors (Foreign Dealers excluded)-Total Buy": "1669500",
+   " Foreign Investors include Mainland Area Investors (Foreign Dealers excluded)-Total Sell": "2281300",
+   "Foreign Investors include Mainland Area Investors (Foreign Dealers excluded)-Difference": "-611800",
+   "Foreign Dealers-Total Buy": "0",
+   "Foreign Dealers-TotalSell": "0",
+   "ForeignDealers-Difference": "0",
+   "ForeignInvestorsIncludeMainlandAreaInvestors-TotalBuy": "1669500",
+   "ForeignInvestorsIncludeMainlandAreaInvestors-TotalSell": "2281300",
+   "ForeignInvestorsInclude MainlandAreaInvestors-Difference": "-611800",
+   "SecuritiesInvestmentTrustCompanies-TotalBuy": "0",
+   "SecuritiesInvestmentTrustCompanies-TotalSell": "0",
+   "SecuritiesInvestmentTrustCompanies-Difference": "0",
+   "Dealers-TotalBuy": "1771000",
+   "Dealers-TotalSell": "7764052",
+   "Dealers-Difference": "-5993052",
+   "Dealers -TotalSell": "7764052",
+   "TotalDifference": "-6604852"
+  },
+  {
+   "Date": "1151016",
+   "SecuritiesCompanyCode": "00679B",
+   "CompanyName": "元大美債20年",
+   "Foreign Investors include Mainland Area Investors (Foreign Dealers excluded)-Total Buy": "2299000",
+   " Foreign Investors include Mainland Area Investors (Foreign Dealers excluded)-Total Sell": "1280000",
+   "Foreign Investors include Mainland Area Investors (Foreign Dealers excluded)-Difference": "1019000",
+   "Foreign Dealers-Total Buy": "0",
+   "Foreign Dealers-TotalSell": "0",
+   "ForeignDealers-Difference": "0",
+   "ForeignInvestorsIncludeMainlandAreaInvestors-TotalBuy": "2299000",
+   "ForeignInvestorsIncludeMainlandAreaInvestors-TotalSell": "1280000",
+   "ForeignInvestorsInclude MainlandAreaInvestors-Difference": "1019000",
+   "SecuritiesInvestmentTrustCompanies-TotalBuy": "0",
+   "SecuritiesInvestmentTrustCompanies-TotalSell": "0",
+   "SecuritiesInvestmentTrustCompanies-Difference": "0",
+   "Dealers-TotalBuy": "18964970",
+   "Dealers-TotalSell": "3660878",
+   "Dealers-Difference": "15304092",
+   "Dealers -TotalSell": "3620878",
+   "TotalDifference": "16323092"
+  }
+ ]
+}
