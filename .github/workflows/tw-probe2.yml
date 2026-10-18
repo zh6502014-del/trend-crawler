@@ -31,7 +31,7 @@ jobs:
 
           def trim(x, d=0):
               if isinstance(x, list): return [trim(i, d + 1) for i in x[:2]]
-              if isinstance(x, dict): return {k: trim(v, d + 1) for k, v in list(x.items())[:25]}
+              if isinstance(x, dict): return {k: (v if k == "fields" else trim(v, d + 1)) for k, v in list(x.items())[:25]}
               return x
 
           def save(name, obj):
@@ -61,7 +61,11 @@ jobs:
             "finmind_datasets": "https://api.finmindtrade.com/api/v4/datasets",
             "finmind_insti": "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id=2330&start_date=2026-10-12&end_date=2026-10-16",
             "finmind_holding": "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id=2330&start_date=2026-10-12&end_date=2026-10-16",
-            "mops_insider": "https://mopsfin.twse.com.tw/opendata/t187ap11_L.csv",
+            "twse_t187ap11": "https://openapi.twse.com.tw/v1/opendata/t187ap11_L",
+            "twse_t187ap12": "https://openapi.twse.com.tw/v1/opendata/t187ap12_L",
+            "tpex_t187ap11": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap11_O",
+            "tpex_t187ap12": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap12_O",
+            "tpex_3insti_openapi": "https://www.tpex.org.tw/openapi/v1/tpex_3insti_daily_trading",
           }
           for name, url in cands.items():
               code, raw = get(url)
