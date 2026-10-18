@@ -40,8 +40,8 @@
 
 1. 原有的 `supabase/schema.sql` 與 `supabase/schema_tw.sql` 資料表須已建立。此次新增的是 `supabase/schema_line.sql`，不修改既有評分與筆記資料。
 2. GitHub Actions Secrets 沿用 `SUPABASE_ACCESS_TOKEN`、`SUPABASE_URL`、`SUPABASE_SERVICE_KEY`、`LINE_CHANNEL_SECRET`、`LINE_CHANNEL_TOKEN`、`LINE_USER_ID`。若 Supabase Auth 有多個帳號，必須新增 `OWNER_UID`，指向自己的儀表板使用者 UUID；只有一個帳號時可自動選取。
-3. 合併到 `main` 或手動執行 `deploy-line-bot`。流程先跑 Node／Python／PostgreSQL 測試，再以 Supabase Management API 執行冪等 SQL、設定 secrets、部署 function。任何步驟失敗即停止。`PROJECT_REF` 延用既有工作流程設定。
-4. Management API token 須能寫入該專案資料庫。如果 SQL 步驟失敗，檢查權限後重跑；亦可在 Supabase SQL Editor 執行同一份檔案。參考 [Run a query API](https://supabase.com/docs/reference/api/v1-run-a-query)。
+3. 合併到 `main` 或手動執行 `deploy-line-bot`。流程先跑 Node／Python／PostgreSQL 測試，再以 service key 驗證資料表版本。版本正確則直接設定 secrets、部署 function；未確認版本時，才以 Supabase Management API 執行冪等 SQL。任何步驟失敗即停止。`PROJECT_REF` 延用既有工作流程設定。
+4. 若部署 token 沒有資料庫 SQL 權限，可先在該專案的 Supabase SQL Editor 執行完整 `supabase/schema_line.sql`，再重跑部署；既有 `SUPABASE_SERVICE_KEY` 即可確認版本，不必增加部署 token 權限。版本函式只授權 service role，並在 SQL 交易完成後才生效。日後變更 SQL 須同步更新 schema 與 Python 腳本的版本值。自動執行 SQL 仍需 Management API 權限，參考 [Run a query API](https://supabase.com/docs/reference/api/v1-run-a-query)。
 5. 確認 LINE Webhook 指向 `/functions/v1/line-webhook`，開啟 webhook 與重新傳送。部署維持 JWT verification 關閉，由 LINE 簽章驗證請求。
 6. 在自己的 LINE 私聊依序驗收：`說明`、`台股 2`、`下一頁`、股票名稱、`加入自選`、寫／讀筆記、`額度`。`解讀` 在未啟用 AI 時也應回覆數據摘要。
 

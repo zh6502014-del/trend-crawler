@@ -26,6 +26,8 @@ jobs:
         with:
           version: latest
       - name: Apply LINE schema before updating the function
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python3 scripts/apply_line_schema.py
       - name: Set function secrets
         env:

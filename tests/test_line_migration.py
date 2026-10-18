@@ -7,6 +7,12 @@ import pytest
 from scripts import apply_line_schema as migration
 
 
+@pytest.fixture(autouse=True)
+def isolated_credentials(monkeypatch):
+    monkeypatch.setenv('PROJECT_REF', 'jxpnamaomzztqqahixvp')
+    monkeypatch.delenv('SUPABASE_SERVICE_KEY', raising=False)
+
+
 def test_migration_reports_api_error_without_exposing_token(monkeypatch, capsys):
     token = 'fake-private-token'
     monkeypatch.setenv('SUPABASE_ACCESS_TOKEN', token)
@@ -49,3 +55,39 @@ def test_migration_success_and_non_json_error(monkeypatch, capsys):
     assert 'applied successfully' in capsys.readouterr().out
     error = urllib.error.HTTPError('https://example.invalid', 500, 'Error', {}, io.BytesIO(b'<html>private server data</html>'))
     assert migration.error_reason(error, 'fake') == 'Non-JSON error response; check API availability'
+
+
+def test_verified_schema_skips_management_api_without_pat(monkeypatch, capsys):
+    monkeypatch.setenv('SUPABASE_SERVICE_KEY', 'fake-service-key')
+    monkeypatch.delenv('SUPABASE_ACCESS_TOKEN', raising=False)
+    calls = []
+    class Response(io.BytesIO):
+        status = 200
+    def accept(request, **kwargs):
+        calls.append(request.full_url)
+        assert request.get_header('Apikey') == 'fake-service-key'
+        assert request.full_url == 'https://jxpnamaomzztqqahixvp.supabase.co/rest/v1/rpc/line_schema_version'
+        return Response(json.dumps(migration.SCHEMA_VERSION).encode())
+    monkeypatch.setattr(migration.urllib.request, 'urlopen', accept)
+    migration.main()
+    assert len(calls) == 1
+    assert 'already applied' in capsys.readouterr().out
+    sql = (migration.Path(migration.__file__).resolve().parents[1] / 'supabase/schema_line.sql').read_text()
+    assert f"select '{migration.SCHEMA_VERSION}'::text" in sql
+
+
+@pytest.mark.parametrize('result', ['old-version', None, {'version': migration.SCHEMA_VERSION}, 'invalid-json', 401, 404, 500, 'timeout'])
+def test_unverified_schema_cannot_skip_migration(monkeypatch, result):
+    monkeypatch.setenv('SUPABASE_SERVICE_KEY', 'fake-service-key')
+    monkeypatch.delenv('SUPABASE_ACCESS_TOKEN', raising=False)
+    class Response(io.BytesIO):
+        status = 200
+    def reject(request, **kwargs):
+        if isinstance(result, int):
+            raise urllib.error.HTTPError(request.full_url, result, 'Error', {}, io.BytesIO(b'private'))
+        if result == 'timeout':
+            raise TimeoutError('private')
+        return Response(b'invalid' if result == 'invalid-json' else json.dumps(result).encode())
+    monkeypatch.setattr(migration.urllib.request, 'urlopen', reject)
+    with pytest.raises(SystemExit, match='Missing GitHub Actions secret'):
+        migration.main()

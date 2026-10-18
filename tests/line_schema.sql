@@ -3,6 +3,10 @@ begin;
 do $$
 declare a line_deliveries; b line_deliveries; n int;
 begin
+  assert line_schema_version() = '2026-10-18.1';
+  assert not has_function_privilege('anon','line_schema_version()','execute');
+  assert not has_function_privilege('authenticated','line_schema_version()','execute');
+  assert has_function_privilege('service_role','line_schema_version()','execute');
   assert claim_line_event('event-1') = true;
   assert claim_line_event('event-1') = false;
   assert claim_line_event('') = false;

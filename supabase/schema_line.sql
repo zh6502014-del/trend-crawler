@@ -88,4 +88,11 @@ revoke all on function public.claim_line_event(text),
   public.prepare_line_delivery(text,text,text,jsonb), public.claim_line_ai(text,int) from public,anon,authenticated;
 grant execute on function public.claim_line_event(text),
   public.prepare_line_delivery(text,text,text,jsonb), public.claim_line_ai(text,int) to service_role;
+
+-- Keep this revision in sync with scripts/apply_line_schema.py after any SQL change.
+-- Created last, in the same transaction: only a complete migration publishes it.
+create or replace function public.line_schema_version() returns text
+language sql stable set search_path = '' as $$ select '2026-10-18.1'::text $$;
+revoke all on function public.line_schema_version() from public,anon,authenticated;
+grant execute on function public.line_schema_version() to service_role;
 commit;
