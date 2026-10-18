@@ -380,7 +380,7 @@ select
   g.rev_yoy, g.rev_streak, g.gross_margin, g.analyst_count, g.inst_pct, g.hn_mentions, g.runway_months,
   prev.score as score_7d, prev.rank as rank_7d,
   s.batch_id, b.published_at, b.metadata->>'scoring_version' as scoring_version,
-  g.fundamentals_fetched_at, g.fundamentals_age_days, g.fundamentals_source, g.price_source, g.hn_fetched_at
+  g.fundamentals_fetched_at, g.fundamentals_age_days, g.fundamentals_source, g.price_source, g.hn_fetched_at, g.profit_margin
 from public.scores s
 join public.publication_batches b on b.id = s.batch_id
 join public.entities e on e.ticker = s.ticker

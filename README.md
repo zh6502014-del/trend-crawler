@@ -96,7 +96,7 @@ from fwd group by 1, 2 order by 1, 2;
 
 這次更新以 GitHub 版本 `5707b08` 為基底，保留台股、金融業淨利率評分、主榜 150 檔限制、大戶訊號、自選筆記、Form C-U、LINE、Telegram 與估值回測。
 
-1. 在部署新版爬蟲前，執行 `supabase/migrations/20261018_reliable_publication.sql`。現有資料庫只需執行這份遷移；`schema.sql` 是完整安裝用。升級保留既有歷史與讀取權限。
+1. 在部署新版爬蟲前，執行 `supabase/migrations/20261018_reliable_publication.sql`。這份遷移已包含金融業淨利率欄位；若已執行較早版本，只需另執行 `supabase/migrations/20261018_usability_profit_margin.sql`，補上前台所需的 `latest_board.profit_margin`。`schema.sql` 是完整安裝用。升級保留既有歷史與讀取權限。
 2. 部署更新分支，確認 Actions Secrets 已設定。價格預設仍為 `massive`；可選用 Repository Variable `PRICE_SOURCE=yahoo`，只切換價格來源，基本面仍使用 SEC。
 3. 手動執行 `daily-crawl`，`only=public`。舊的調整價快取會逐日重建為原始價快取；原始價在讀取時統一套用分割事件。中斷後可續跑，不必再次勾選 `full_refresh`。
 4. 確認 `crawl_runs.stats.public.published=true`、`batch_id` 存在，且 `latest_board` 的筆數與該批次 `row_count` 相符，再恢復例行排程。`partial` 可能已有完整發布，但有來源缺漏，請檢查 `warnings`。
@@ -108,6 +108,8 @@ from fwd group by 1, 2 order by 1, 2;
 - **Hacker News 快取**：成功查詢（包括零筆）保存 24 小時；查詢失敗不當成零筆，也不快取。
 - **可追溯性**：發布紀錄保存評分版本、程式雜湊、設定、股票池與來源狀態，原始評分欄位與來源日期存入 `signals`。
 - **前端**：各來源獨立載入、可重新載入，顯示來源日期與缺漏，並防止跨批次分頁混用。
+- **操作與市場切換**：登入寄送期間防止重複提交，斷線後可重試；台股連結、日期與來源使用台股資料；成績單忽略切換前的延遲回應；鍵盤可進入筆記並返回原列。
+- **篩選與手機版**：保留美股、台股與募資條件。手機將進階篩選與資料來源說明收合，顯示已套用的條件數量；重要錯誤仍直接呈現。「條件組名稱」可將目前美股篩選存為按鈕，僅儲存在此瀏覽器，最多保留 8 組。
 
 ## 測試與資料限制
 
@@ -117,9 +119,11 @@ python -m pytest -q
 npm install --ignore-scripts
 npx playwright install chromium
 npm test
+# 只跑前台測試（真實 Tabulator / Chart.js，模擬 Supabase）
+npm run test:ui
 ```
 
-檢查涵蓋 SEC/台股解析、評分、快取、發布交易與 RLS、介面登入/重試/篩選，以及既有 LINE 指令。測試使用本機資料與模擬服務，不會向使用者發送 LINE 或 Telegram 訊息。真實 API 權限與 Supabase 部署仍需在線上驗證。
+檢查涵蓋 SEC/台股解析、評分、快取、發布交易與 RLS、介面登入/重試/篩選，以及既有 LINE 指令。`tests/usability.test.cjs` 保留原本 20 個易用性情境，另補手機篩選、台股條件還原、鍵盤循環與瀏覽器儲存失敗情境，使用與前台相同版本的表格和圖表套件。這是自動化操作測試，並非真人受測結果。測試使用本機資料與模擬服務，不會向使用者發送 LINE 或 Telegram 訊息。真實 API 權限與 Supabase 部署仍需在線上驗證。
 
 Massive 的報酬率包含股票分割調整、不包含股息；Yahoo 選項包含分割與股息調整，切換來源時不能視為相同報酬定義。SEC 財報取得日期也不是財報期間，申報本身可能落後。HN 名稱比對仍可能有同名誤差；百分位分數仍受當日股票池影響。
 

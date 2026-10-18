@@ -37,7 +37,7 @@
   const daysUntil = (iso) => Math.round((Date.parse(iso + 'T00:00:00Z') - Date.parse(todayStr() + 'T00:00:00Z')) / 86400000);
   const store = {
     get(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: views just won't persist */ } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
   };
 
   const FLAGS = {
@@ -61,21 +61,39 @@
     watch: new Map(), tab: 'main', tq: '', tsector: '', tmin: 0, tgrow: false, ttpex: false, tinst: false, reportLoaded: {}, q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
     maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, watchOnly: false, portal: '', soon: false, view: 'all', saved: [],
     stockTable: null, raiseTable: null, stockReady: false, raiseReady: false,
-    charts: [], current: null, lastFocus: null,
+    charts: [], current: null, lastFocus: null, reportRequest: 0, loginPending: false,
   };
   const filterKey = 'trend-crawler.filters.v1';
+  const textFilters = ['q', 'sector', 'rq', 'portal', 'tq', 'tsector', 'view'];
+  const boolFilters = ['hideRisk', 'ropen', 'onlyNew', 'smartOnly', 'watchOnly', 'soon', 'tgrow', 'ttpex', 'tinst'];
+  const numberFilters = { minScore: 80, maxCap: Number.MAX_SAFE_INTEGER, minStreak: 100, tmin: 60 };
+  const tabs = ['main', 'watch', 'raise', 'heat', 'report', 'tw', 'twwatch', 'twheat', 'twreport'];
+  const isTaiwan = () => state.tab.startsWith('tw');
   function saveFilters() {
-    const { tab, q, sector, minScore, hideRisk, rq, ropen } = state;
-    try { localStorage.setItem(filterKey, JSON.stringify({ tab, q, sector, minScore, hideRisk, rq, ropen })); } catch {}
+    store.set(filterKey, Object.fromEntries(['tab', ...textFilters, ...boolFilters, ...Object.keys(numberFilters)].map((k) => [k, state[k]])));
+    renderFilterToggle();
   }
   function restoreFilters() {
-    try {
-      const s = JSON.parse(localStorage.getItem(filterKey) || '{}');
-      for (const key of ['q', 'sector', 'rq']) if (typeof s[key] === 'string') state[key] = s[key];
-      for (const key of ['hideRisk', 'ropen']) if (typeof s[key] === 'boolean') state[key] = s[key];
-      if (['main', 'watch', 'raise'].includes(s.tab)) state.tab = s.tab;
-      if (isNum(s.minScore)) state.minScore = Math.max(0, Math.min(80, s.minScore));
-    } catch {}
+    const s = store.get(filterKey) || {};
+    for (const key of textFilters) if (typeof s[key] === 'string') state[key] = s[key];
+    for (const key of boolFilters) if (typeof s[key] === 'boolean') state[key] = s[key];
+    for (const [key, max] of Object.entries(numberFilters)) if (isNum(s[key])) state[key] = Math.max(0, Math.min(max, s[key]));
+    if (tabs.includes(s.tab)) state.tab = s.tab;
+  }
+
+  function syncFilters() {
+    for (const [id, key] of Object.entries({ 'f-q': 'q', 'f-sector': 'sector', 'f-min': 'minScore', 'r-q': 'rq', 'r-portal': 'portal', 't-q': 'tq', 't-sector': 'tsector', 't-min': 'tmin' })) $('#' + id).value = state[key];
+    for (const [id, key] of Object.entries({ 'f-risk': 'hideRisk', 'f-smart': 'smartOnly', 'f-watch': 'watchOnly', 'r-open': 'ropen', 'r-soon': 'soon', 't-grow': 'tgrow', 't-inst': 'tinst', 't-tpex': 'ttpex' })) $('#' + id).checked = state[key];
+    $('#f-min-out').textContent = state.minScore;
+    $('#t-min-out').textContent = state.tmin;
+  }
+
+  function renderFilterToggle() {
+    const keys = isTaiwan() ? ['tsector', 'tmin', 'tgrow', 'tinst', 'ttpex'] : state.tab === 'raise'
+      ? ['portal', 'ropen', 'soon'] : ['sector', 'minScore', 'hideRisk', 'maxCap', 'minStreak', 'onlyNew', 'smartOnly', 'watchOnly'];
+    const n = keys.filter((k) => state[k]).length;
+    const open = $('#filter-toggle').getAttribute('aria-expanded') === 'true';
+    $('#filter-toggle').textContent = `${open ? '收合' : '展開'}篩選${n ? `（${n}）` : ''}`;
   }
 
   // ── small UI helpers ────────────────────────────────────────────────────
@@ -114,6 +132,7 @@
     $('#login-form').addEventListener('submit', onLogin);
     $('#reload').addEventListener('click', () => start(true));
     restoreFilters();
+    $('#source-details').open = !matchMedia('(max-width: 720px)').matches;
 
     if (!CFG.REQUIRE_LOGIN) return start();
 
@@ -129,16 +148,30 @@
 
   async function onLogin(ev) {
     ev.preventDefault();
+    if (state.loginPending) return;
     const email = $('#login-email').value.trim();
     const msg = $('#login-msg');
+    const button = $('#login-form button');
+    state.loginPending = true;
+    button.disabled = true;
+    $('#login-form').setAttribute('aria-busy', 'true');
     msg.textContent = '寄送中…';
-    const { error } = await state.sb.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false, emailRedirectTo: location.origin + location.pathname },
-    });
-    msg.textContent = error
-      ? '寄送失敗：' + error.message + '（這個 Email 需要先在 Supabase 的 Authentication → Users 建立。）'
-      : '已寄出。到信箱點開連結就會回到這個頁面。';
+    try {
+      const redirect = new URL(location.origin + location.pathname);
+      const ticker = new URLSearchParams(location.search).get('t');
+      if (ticker && /^[A-Za-z0-9.\-]{1,8}$/.test(ticker)) redirect.searchParams.set('t', ticker);
+      const { error } = await state.sb.auth.signInWithOtp({
+        email, options: { shouldCreateUser: false, emailRedirectTo: redirect.href },
+      });
+      if (error) throw error;
+      msg.textContent = '已寄出。到信箱點開連結就會回到這個頁面。';
+    } catch {
+      msg.textContent = '寄送失敗，請確認網路連線後重試。若仍無法寄出，請確認 Email 正確，並請管理員確認帳號已受邀。';
+    } finally {
+      state.loginPending = false;
+      button.disabled = false;
+      $('#login-form').removeAttribute('aria-busy');
+    }
   }
 
   // ── data ────────────────────────────────────────────────────────────────
@@ -170,6 +203,8 @@
   async function start(force = false) {
     if (state.loading || (state.started && !force)) return;
     state.loading = true;
+    state.reportRequest++;
+    state.repChart?.destroy(); state.repChart = null;
     state.started = true;
     $('#reload').disabled = true;
     $('#reload').hidden = false;
@@ -234,9 +269,10 @@
     fillPortals();
     renderViews();
     if (!state.controlsWired) { wireControls(); state.controlsWired = true; }
-    $('#f-q').value = state.q; $('#f-sector').value = state.sector;
-    $('#f-min').value = state.minScore; $('#f-min-out').textContent = state.minScore;
-    $('#f-risk').checked = state.hideRisk; $('#r-q').value = state.rq; $('#r-open').checked = state.ropen;
+    const sectors = [...new Set((state.tw || []).map((r) => r.sector).filter(Boolean))].sort();
+    $('#t-sector').innerHTML = '<option value="">全部產業</option>' + sectors.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    if (!sectors.includes(state.tsector)) state.tsector = '';
+    syncFilters();
     buildStockTable();
     setTab(state.tab);
   }
@@ -244,28 +280,33 @@
   function renderStatus() {
     const pill = $('#status');
     const banner = $('#banner');
-    const asOf = state.rows[0]?.as_of;
-    const run = state.run;
-    const msgs = Object.entries(state.loadErrors).map(([k, v]) => `${k}載入失敗：${v}。可按「重新載入」重試。`);
+    const tw = isTaiwan();
+    const rows = tw ? state.tw || [] : state.rows;
+    const asOf = rows[0]?.as_of;
+    const run = tw ? state.runs.find((r) => r.stats?.tw || r.errors?.tw) : state.run;
+    const runStatus = tw ? run?.stats?.tw?.status || (run?.errors?.tw ? 'failed' : null) : run?.status;
+    const msgs = Object.entries(state.loadErrors).filter(([k]) => tw
+      ? ['台股榜單', '執行狀態'].includes(k) : k !== '台股榜單')
+      .map(([k, v]) => `${k}載入失敗：${v}。可按「重新載入」重試。`);
     let level = '';
 
-    if (!asOf && !state.loadErrors['股票榜單']) {
-      msgs.push('尚未有完整發布的榜單。請執行一次資料更新；首次載入所需時間依價格來源與股票數量而定。');
+    if (!asOf && !state.loadErrors[tw ? '台股榜單' : '股票榜單']) {
+      msgs.push(`尚未有${tw ? '台股' : '完整發布的美股'}榜單。請執行一次資料更新；首次載入所需時間依價格來源與股票數量而定。`);
       level = 'warn';
     } else if (asOf) {
       const age = daysSince(asOf);
-      const published = state.rows[0]?.published_at;
+      const published = rows[0]?.published_at;
       const rel = published ? new Intl.RelativeTimeFormat('zh-TW', { numeric: 'auto' }).format(-Math.round((Date.now() - new Date(published)) / 3600000), 'hour') : '';
-      $('#status-text').textContent = `資料日期 ${asOf}${rel ? '，' + rel + '更新' : ''}`;
+      $('#status-text').textContent = `${tw ? '台股' : '美股'}資料日期 ${asOf}${rel ? '，' + rel + '更新' : ''}`;
       const stale = age > (CFG.STALE_AFTER_DAYS ?? 4);
       pill.className = 'pill' + (stale ? (age > 2 * (CFG.STALE_AFTER_DAYS ?? 4) ? ' bad' : ' warn') : '');
       pill.hidden = false;
       if (stale) { msgs.push(`資料已經 ${age} 天沒有更新。到 GitHub 的 Actions 頁籤看 daily-crawl 有沒有失敗。`); level = age > 2 * (CFG.STALE_AFTER_DAYS ?? 4) ? 'bad' : 'warn'; }
     }
-    if (run && (run.status === 'partial' || run.status === 'failed')) {
-      const errs = run.errors ? Object.entries(run.errors).map(([k, v]) => `${k}：${v}`).join('；') : '';
-      msgs.push(`最近一次執行${run.status === 'failed' ? '失敗' : '只有部分成功'}。${errs}`);
-      level = run.status === 'failed' ? 'bad' : level || 'warn';
+    if (run && (runStatus === 'partial' || runStatus === 'failed')) {
+      const errs = run.errors ? Object.entries(run.errors).filter(([k]) => !tw || k === 'tw').map(([k, v]) => `${k}：${v}`).join('；') : '';
+      msgs.push(`最近一次${tw ? '台股' : ''}執行${runStatus === 'failed' ? '失敗' : '只有部分成功'}。${errs}`);
+      level = runStatus === 'failed' ? 'bad' : level || 'warn';
     }
     if (msgs.length) {
       banner.className = 'banner' + (level === 'bad' ? ' bad' : '');
@@ -283,7 +324,10 @@
     const age = dated.length ? `最久 ${Math.max(...dated)} 天前` : '日期未知';
     const hnUnknown = state.rows.filter((r) => !isNum(r.hn_mentions)).length;
     const statusText = (s) => ({ ok: '成功', partial: '部分成功', failed: '失敗' }[s] || '尚無紀錄');
-    const sources = [
+    const sources = tw ? [
+      ['台股行情', `證交所／櫃買中心 · ${asOf || '尚無榜單'}`],
+      ['營收與法人', '證交所／櫃買中心公開資料；各項資料可能有不同更新時間'],
+    ] : [
       ['價格', asOf ? `${state.rows[0].price_source || '來源未記錄'} · ${asOf}` : '尚無完整榜單'],
       ['基本面', `${age} · ${overdue} 檔待更新${health.fundamentals?.expired ? ` · ${health.fundamentals.expired} 檔過期排除` : ''}`],
       ['Hacker News', `${hnUnknown} 檔無資料${health.attention?.failed ? ` · ${health.attention.failed} 檔查詢失敗` : ''}`],
@@ -295,10 +339,10 @@
   function renderQuality() {
     const rows = state.rows;
     const n = rows.length;
-    if (!n) return;
-    const noGm = rows.filter((r) => !isNum(r.gross_margin)).length;
+    if (!n) { $('#quality').textContent = ''; return; }
+    const noGm = rows.filter((r) => !isNum(r.sector === '金融與保險' ? r.profit_margin : r.gross_margin)).length;
     const thin = rows.filter((r) => (r.flags || []).includes('data_thin')).length;
-    $('#quality').textContent = `共評分 ${nf(n)} 檔；${nf(noGm)} 檔（${Math.round((noGm / n) * 100)}%）沒有毛利率資料，${nf(thin)} 檔被標為資料不足，這些分數可信度較低。擁擠度目前只含 Hacker News 與成交額，沒有分析師與法人資料。`;
+    $('#quality').textContent = `共評分 ${nf(n)} 檔；${nf(noGm)} 檔（${Math.round((noGm / n) * 100)}%）缺少評分所需利潤率（金融業採淨利率，其餘採毛利率），${nf(thin)} 檔被標為資料不足，這些分數可信度較低。擁擠度目前只含 Hacker News 與成交額，沒有分析師與法人資料。`;
   }
 
   function fillPortals() {
@@ -344,7 +388,7 @@
     box.innerHTML =
       presets.map((p) => btn(p.id, p.label)).join('') +
       state.saved.map((v, i) => btn('s' + i, v.label, `<button type="button" class="vdel" data-del="${i}" aria-label="刪除視圖 ${esc(v.label)}">✕</button>`)).join('') +
-      '<input id="view-name" type="text" maxlength="20" placeholder="視圖名稱" aria-label="視圖名稱"><button type="button" class="vbtn" id="view-save">儲存目前條件</button>' +
+      '<div class="save-view"><label for="view-name">條件組名稱</label><input id="view-name" type="text" maxlength="20" placeholder="例如：穩定成長股" aria-describedby="view-help"><button type="button" class="vbtn" id="view-save">儲存目前條件</button><span id="view-help" class="vnote">替目前篩選命名，儲存在此瀏覽器，下次一鍵套用。</span></div><span id="view-msg" class="vnote" role="status"></span>' +
       (extras.length ? `<span class="vnote">額外條件：${esc(extras.join('、'))}</span>` : '');
   }
 
@@ -365,12 +409,17 @@
         renderViews();
       } else if (t.id === 'view-save') {
         const name = $('#view-name').value.trim();
-        if (!name) { $('#view-name').focus(); return; }
+        if (!name) { $('#view-msg').textContent = '請先輸入條件組名稱。'; $('#view-name').focus(); return; }
         const list = store.get('tc_views') || [];
         list.push({ label: name, f: { q: state.q, sector: state.sector, minScore: state.minScore, hideRisk: state.hideRisk, maxCap: state.maxCap, minStreak: state.minStreak, onlyNew: state.onlyNew, smartOnly: state.smartOnly, watchOnly: state.watchOnly } });
-        store.set('tc_views', list.slice(-8));
+        if (!store.set('tc_views', list.slice(-8))) {
+          $('#view-msg').textContent = '儲存失敗：目前瀏覽器無法儲存條件，請檢查儲存空間或隱私設定後重試。';
+          return;
+        }
         state.view = 's' + (Math.min(list.length, 8) - 1);
         renderViews();
+        saveFilters();
+        $('#view-msg').textContent = `已儲存「${name}」，點同名按鈕即可套用。`;
       }
     });
   }
@@ -379,13 +428,19 @@
     const sel = $('#f-sector');
     sel.innerHTML = '<option value="">全部產業</option>';
     const sectors = [...new Set(state.rows.map((r) => r.sector).filter(Boolean))].sort();
-    if (!sectors.length) sel.hidden = true;  // SEC data has no sector: hide an empty filter
+    sel.hidden = !sectors.length;
     sel.insertAdjacentHTML('beforeend', sectors.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join(''));
     if (!sectors.includes(state.sector)) state.sector = '';
   }
 
   // ── controls ────────────────────────────────────────────────────────────
   function wireControls() {
+    $('#filter-toggle').addEventListener('click', () => {
+      const open = $('#filter-toggle').getAttribute('aria-expanded') !== 'true';
+      $('#filter-toggle').setAttribute('aria-expanded', String(open));
+      $('#app').classList.toggle('filters-open', open);
+      renderFilterToggle();
+    });
     const tabs = $$('#tabs-us button');
     tabs.forEach((b, i) => {
       b.addEventListener('click', () => setTab(b.dataset.tab));
@@ -397,8 +452,6 @@
     });
     $$('#market button').forEach((b) => b.addEventListener('click', () => setMarket(b.dataset.market)));
     $$('#tabs-tw button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
-    const tsec = [...new Set((state.tw || []).map((r) => r.sector).filter(Boolean))].sort();
-    $('#t-sector').insertAdjacentHTML('beforeend', tsec.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join(''));
     $('#t-q').addEventListener('input', (e) => { state.tq = e.target.value; applyTwFilters(); });
     $('#t-sector').addEventListener('change', (e) => { state.tsector = e.target.value; applyTwFilters(); });
     $('#t-min').addEventListener('input', (e) => { state.tmin = +e.target.value; $('#t-min-out').textContent = e.target.value; applyTwFilters(); });
@@ -437,9 +490,19 @@
 
   function setTab(tab) {
     state.tab = tab;
+    state.reportRequest++;
+    state.repChart?.destroy(); state.repChart = null;
+    const market = isTaiwan() ? 'tw' : 'us';
+    state.market = market;
+    $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === market)));
+    $('#tabs-us').hidden = market === 'tw';
+    $('#tabs-tw').hidden = market !== 'tw';
+    saveFilters();
+    renderStatus();
     $$('#tabs-us button, #tabs-tw button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
     if (['tw', 'twwatch', 'twheat', 'twreport'].includes(tab)) state.twTab = tab;
     const rep = ['report', 'heat', 'twreport', 'twheat'].includes(tab);
+    $('#filter-toggle').hidden = rep;
     const raise = tab === 'raise';
     const tw = tab === 'tw' || tab === 'twwatch';
     $('#report').hidden = !(tab === 'report' || tab === 'twreport');
@@ -505,12 +568,15 @@
     const bn = tw ? '加權指數' : 'SPY';
     const key = tw ? 'tw' : 'us';
     const box = $('#report-body');
+    const request = ++state.reportRequest;
+    box.innerHTML = '<p class="muted" role="status">載入中…</p>';
     let rows = [];
     try {
       rows = await pageAll((a, b) => state.sb.from(tw ? 'tw_report_card' : 'report_card').select('*').order('as_of', { ascending: false }).range(a, b));
     } catch (e) { rows = null; }
+    if (request !== state.reportRequest) return;
     state.reportLoaded[key] = true;
-    if (rows === null) { box.innerHTML = '<p class="muted">成績單的資料表還不存在，請先在 Supabase 執行最新的 schema' + (tw ? '_tw' : '') + '.sql。</p>'; return; }
+    if (rows === null) { box.innerHTML = '<p class="muted" role="status">成績單載入失敗，請按「重新載入」重試。若持續失敗，請聯絡管理員確認資料來源。</p>'; return; }
     if (!rows.length) {
       box.innerHTML = `<h3>歷史成績單</h3><p class="muted">還在累積中。每天收盤後記錄主榜前 20 名，滿 5 個與 20 個交易日後，這裡會顯示它們的平均報酬、對比 ${bn} 的超額報酬，以及打敗 ${bn} 的比例。第一筆大約要等一週。</p>`;
       return;
@@ -549,6 +615,8 @@
 
   function applyFilters() {
     saveFilters();
+    if (isTaiwan()) { applyTwFilters(); return; }
+    if (['report', 'heat'].includes(state.tab)) return;
     if (state.tab === 'raise') {
       if (!state.raiseReady) return;
       const q = state.rq.trim().toLowerCase();
@@ -721,6 +789,7 @@
   }
 
   function openTwStock(d) {
+    destroyCharts();
     state.current = d.ticker;
     const diff = isNum(d.score_7d) ? d.score - d.score_7d : null;
     const f = (d.flags || []).filter((x) => FLAGS[x]);
@@ -772,6 +841,8 @@
   }
 
   function applyTwFilters() {
+    if (!isTaiwan()) return;
+    saveFilters();
     if (!state.twReady) return;
     const q = state.tq.trim().toLowerCase();
     state.twTable.setFilter((d) =>
@@ -861,7 +932,8 @@
     if (!dr.classList.contains('open')) return;
     if (e.key === 'Escape') { closeDrawer(); return; }
     if (e.key === 'Tab') {  // keep focus inside the drawer while it is open
-      const f = $$('a[href],button:not([disabled])', dr);
+      const f = $$('a[href],button,input,textarea,select,[tabindex]', dr)
+        .filter((el) => !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden],[inert]') && el.getClientRects().length);
       if (!f.length) return;
       const first = f[0], last = f[f.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -886,11 +958,11 @@
     state.linkDone = true;
     const t = m[1].toUpperCase();
     let d = (state.rows || []).find((r) => r.ticker === t);
-    if (!d && /^\d/.test(t)) { // Taiwan code: switch the market first, then open it
+    if (d) { setTab(d.board === 'watch' ? 'watch' : 'main'); openStock(d); return; }
+    if (/^\d/.test(t)) {
       d = (state.tw || []).find((r) => r.ticker === t);
-      if (d) setMarket('tw');
+      if (d) { setTab(d.board === 'tw_watch' ? 'twwatch' : 'tw'); openTwStock(d); }
     }
-    if (d) openStock(d);
   }
 
   function openStock(d) {
@@ -901,6 +973,9 @@
     const yahoo = `https://finance.yahoo.com/quote/${encodeURIComponent(d.ticker)}`;
     const sec = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(d.ticker)}&type=10-&dateb=&owner=include&count=40`;
     const boardName = d.board === 'main' ? '主榜' : '觀察清單';
+    const financial = d.sector === '金融與保險';
+    const margin = financial ? d.profit_margin : d.gross_margin;
+    const marginLabel = financial ? '淨利率' : '毛利率';
 
     $('#drawer-body').innerHTML = `
       <div class="d-head">
@@ -917,7 +992,7 @@
       </div>
       <div class="d-section radar-wrap"><canvas id="radar" height="220" aria-label="四個面向雷達圖"></canvas><p class="chart-note">藍色是這檔，灰色是主榜的中位數。冷門度是擁擠的反面。</p></div>
       ${pillar(0, '成長', d.growth, `營收年增 ${spct(d.rev_yoy)}，6 個月相對強度 ${spct(d.rs_6m)}（相對 SPY）。`, beats(d.growth))}
-      ${pillar(1, '驗證', d.validated, `連續 ${nf(d.rev_streak)} 季營收季增，毛利率 ${pct(d.gross_margin)}。`, isNum(d.gross_margin) ? beats(d.validated) : '這檔沒有毛利率資料，這一項是以偏低的預設值估算，可信度較低。')}
+      ${pillar(1, '驗證', d.validated, `連續 ${nf(d.rev_streak)} 季營收季增，${marginLabel} ${pct(margin)}。${financial ? '金融業以淨利率衡量獲利能力。' : ''}`, isNum(margin) ? '' : `目前缺少${marginLabel}資料，請留意資料完整度。`)}
       ${pillar(2, '進場', d.accessibility, `市值 ${usd(d.mkt_cap)}，20 日平均成交額 ${usd(d.dollar_vol)}，股價 $${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `Hacker News 近 30 天 ${isNum(d.hn_mentions) ? nf(d.hn_mentions) + ' 則' : '沒有資料'}，20 日平均成交額 ${usd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。目前沒有分析師與法人資料。` : '')}
       <div class="d-section"><h3>我的筆記</h3><div id="watch-box"></div></div>

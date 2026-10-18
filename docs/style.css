@@ -347,6 +347,35 @@ select.field option { color: #131a2f; background: #fff; }
 .views .vdel { margin-left: -4px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px; }
 .views input { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--hair); background: var(--glass); color: var(--ink); width: 130px; }
 .views .vnote { font-size: 12px; color: var(--muted); }
+.save-view { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; padding-top: 6px; }
+.save-view label { font-size: 13px; color: var(--muted); }
+.save-view input { width: 180px; border-radius: var(--r-ctl); }
+#filter-toggle { display: none; }
+.source-details { margin: 0 0 14px; }
+.source-details summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+@media (max-width: 720px) {
+  .top { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 12px; }
+  .top h1 { white-space: nowrap; font-size: 18px; }
+  .top-right { display: contents; }
+  .top .btn { min-height: 44px; padding: 8px 10px; font-size: 13px; }
+  #signout { grid-column: 2; grid-row: 1; }
+  #status { grid-column: 1; grid-row: 2; min-width: 0; font-size: 11px; border-radius: 10px; padding: 5px 8px; }
+  #status .dot { flex: 0 0 6px; height: 6px; }
+  #reload { grid-column: 2; grid-row: 2; }
+  #tabs-us, #tabs-tw { max-width: 100%; overflow-x: auto; white-space: nowrap; }
+  #tabs-us button, #tabs-tw button { flex-shrink: 0; min-height: 44px; padding: 8px 10px; font-size: 13px; }
+  #filter-toggle { display: inline-block; min-height: 44px; font-size: 13px; }
+  #app:not(.filters-open) .filters > :not(input[type="search"]),
+  #app:not(.filters-open) #views { display: none; }
+  .filters input[type="search"] { width: 100%; min-width: 0; min-height: 44px; }
+  .count { width: auto; font-size: 12px; }
+  .source-details summary { min-height: 44px; display: list-item; padding: 12px 4px; }
+  .source-status { grid-template-columns: 1fr; }
+  .views .vbtn, .views input { min-height: 44px; }
+  .save-view input { flex: 1; min-width: 120px; }
+  .save-view .vnote { flex-basis: 100%; }
+}
 .quality { font-size: 12.5px; margin: 0 0 10px; line-height: 1.5; }
 .why { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
 

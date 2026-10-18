@@ -5,10 +5,12 @@
   "scripts": {
     "test": "node --test tests/*.test.cjs tests/*.test.mjs",
     "test:sql": "node --test tests/publication.test.cjs",
-    "test:ui": "node --test tests/dashboard.test.cjs"
+    "test:ui": "node --test tests/dashboard.test.cjs tests/usability.test.cjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.10",
-    "playwright": "1.62.1"
+    "playwright": "1.62.1",
+    "tabulator-tables": "6.3.0",
+    "chart.js": "4.4.4"
   }
 }

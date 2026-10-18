@@ -10,12 +10,12 @@
 
   <!-- Libraries, all MIT-licensed, pinned to exact versions (no build step). -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css">
-  <link rel="stylesheet" href="style.css?v=20261021">
+  <link rel="stylesheet" href="style.css?v=20261018-ux1">
   <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
   <script defer src="config.js"></script>
-  <script defer src="app.js?v=20261027"></script>
+  <script defer src="app.js?v=20261018-ux1"></script>
 </head>
 <body>
   <header class="top glass">
@@ -96,14 +96,18 @@
           <label class="field glass check"><input id="r-soon" type="checkbox"> 14 天內截止</label>
         </div>
 
-        <div class="views" id="views" aria-label="快速視圖"></div>
+        <button id="filter-toggle" class="btn ghost" type="button" aria-expanded="false" aria-controls="filters-stock filters-tw filters-raise views">展開篩選</button>
+        <div class="views" id="views" aria-label="快速篩選與已儲存條件"></div>
 
         <span id="count" class="muted count" role="status"></span>
       </div>
 
-      <p id="quality" class="muted quality" role="note"></p>
       <div id="banner" class="banner" hidden></div>
-      <section id="source-status" class="source-status" aria-label="資料來源狀態" aria-live="polite"></section>
+      <details id="source-details" class="source-details" open>
+        <summary>資料來源與完整度</summary>
+        <p id="quality" class="muted quality" role="note"></p>
+        <section id="source-status" class="source-status" aria-label="資料來源狀態" aria-live="polite"></section>
+      </details>
 
       <section class="board glass strong">
         <div id="tbl-stock"></div>
@@ -133,7 +137,7 @@
         <p class="muted">每檔右側的四根細條是它的分數結構，由左到右：</p>
         <ul>
           <li><i class="sw g0"></i><b>成長</b> 營收與相對強度往上走的速度</li>
-          <li><i class="sw g1"></i><b>驗證</b> 成長是不是真的：連續季增與毛利率</li>
+          <li><i class="sw g1"></i><b>驗證</b> 成長是不是真的：連續季增與毛利率（金融業採淨利率）</li>
           <li><i class="sw g2"></i><b>進場</b> 小額資金買得到、賣得掉嗎</li>
           <li><i class="sw g3"></i><b>擁擠</b> Hacker News 提及與成交額越高，代表越多人已經注意到，會扣分</li>
         </ul>
@@ -151,7 +155,7 @@
   </footer>
 
   <div id="scrim" class="scrim" hidden></div>
-  <aside id="drawer" class="drawer glass strong" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
+  <aside id="drawer" class="drawer glass strong" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" inert>
     <button id="drawer-close" class="btn ghost close" aria-label="關閉">✕</button>
     <div id="drawer-body"></div>
   </aside>

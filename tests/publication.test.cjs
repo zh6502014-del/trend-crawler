@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { PGlite } = require(process.env.PGLITE_MODULE || '@electric-sql/pglite');
 const schema = fs.readFileSync(path.join(__dirname, '../supabase/schema.sql'), 'utf8');
 const migration = fs.readFileSync(path.join(__dirname, '../supabase/migrations/20261018_reliable_publication.sql'), 'utf8');
+const usabilityMigration = fs.readFileSync(path.join(__dirname, '../supabase/migrations/20261018_usability_profit_margin.sql'), 'utf8');
 let db;
 before(async () => {
   db = new PGlite();
@@ -23,7 +24,7 @@ async function stage(tickers, day = '2026-10-13', options = {}) {
     JSON.stringify({ scoring_version: 'test' }), options.created || new Date().toISOString()]);
   for (const [i, ticker] of tickers.entries()) {
     const entity = { ticker, name: options.name || ticker, updated_at: new Date().toISOString() };
-    const signal = { ticker, as_of: day, price: 10, fundamentals_age_days: 1 };
+    const signal = { ticker, as_of: day, price: 10, fundamentals_age_days: 1, ...options.signal };
     const score = { ticker, as_of: day, batch_id: id, rank: i + 1, board: options.board || 'main', score: 50, flags: [] };
     await db.query(`insert into public.publication_rows(batch_id,ticker,entity,signal,score)
       values ($1,$2,$3,$4,$5)`, [id, ticker, JSON.stringify(entity), JSON.stringify(signal), JSON.stringify(score)]);
@@ -36,7 +37,30 @@ const board = async () => (await db.query('select ticker,batch_id from public.la
 test('fresh schema and migration can both be run repeatedly', async () => {
   await db.exec(schema);
   await db.exec(migration);
+  await db.exec(usabilityMigration);
+  await db.exec(usabilityMigration);
   assert.ok(schema.endsWith(migration), 'fresh schema must contain the exact migration');
+});
+
+test('profit margin upgrades existing boards without losing rows or dependent views', async () => {
+  const id = await stage(['BANK'], '2026-10-13', { signal: { gross_margin: null, profit_margin: 0.25 } });
+  await publish(id);
+  // Reproduce the previous view, which did not expose profit_margin.
+  await db.exec('drop view public.latest_board');
+  const view = migration.slice(migration.indexOf('create or replace view public.latest_board'), migration.indexOf('\ncommit;'));
+  await db.exec(view.replace(', g.profit_margin', ''));
+  await db.exec('create view public.board_consumer as select ticker from public.latest_board');
+  await db.exec(usabilityMigration);
+  const result = await db.query('select ticker, gross_margin, profit_margin from public.latest_board');
+  assert.equal(result.rows[0].ticker, 'BANK');
+  assert.equal(result.rows[0].gross_margin, null);
+  assert.equal(Number(result.rows[0].profit_margin), 0.25);
+  assert.equal((await db.query('select ticker from public.board_consumer')).rows[0].ticker, 'BANK');
+  await db.exec('drop view public.board_consumer');
+  await db.exec('set role anon');
+  assert.deepEqual(await board(), []);
+  await db.exec('set role authenticated');
+  assert.equal((await board()).length, 1);
 });
 
 test('partial staged upload leaves the previous complete board visible', async () => {
