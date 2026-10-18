@@ -1,0 +1,83 @@
+name: tw-probe2
+
+# One-off: find out which institutional / insider ("big money") datasets can be fetched from a GitHub runner.
+# Writes samples/tw/inst/*.json. Safe to delete afterwards.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe
+        run: |
+          mkdir -p samples/tw/inst
+          python3 - <<'PY'
+          import json, re, urllib.request, urllib.error
+
+          def get(url, t=45):
+              req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=t) as r:
+                      return r.status, r.read()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read()[:300]
+              except Exception as e:
+                  return 0, repr(e).encode()
+
+          def trim(x, d=0):
+              if isinstance(x, list): return [trim(i, d + 1) for i in x[:2]]
+              if isinstance(x, dict): return {k: trim(v, d + 1) for k, v in list(x.items())[:25]}
+              return x
+
+          def save(name, obj):
+              json.dump(obj, open(f"samples/tw/inst/{name}.json", "w"), ensure_ascii=False, indent=1)
+
+          # 1) list every endpoint the two OpenAPIs document
+          for name, url in [("twse_swagger", "https://openapi.twse.com.tw/v1/swagger.json"),
+                            ("tpex_swagger", "https://www.tpex.org.tw/openapi/swagger.json")]:
+              code, raw = get(url)
+              out = {"url": url, "http": code, "bytes": len(raw)}
+              try:
+                  sw = json.loads(raw.decode("utf-8", "replace"))
+                  out["paths"] = {p: (list(v.values())[0].get("summary") or list(v.values())[0].get("description") or "") for p, v in sw.get("paths", {}).items()}
+              except Exception as e:
+                  out["error"] = repr(e); out["head"] = raw[:300].decode("utf-8", "replace")
+              save(name, out)
+              print(name, code, len(out.get("paths", {})))
+
+          # 2) institutional / insider candidates
+          cands = {
+            "twse_t86": "https://www.twse.com.tw/rwd/zh/fund/T86?date=20261016&selectType=ALLBUT0999&response=json",
+            "twse_t86_old": "https://www.twse.com.tw/fund/T86?response=json&date=20261016&selectType=ALLBUT0999",
+            "twse_bfi82u": "https://www.twse.com.tw/rwd/zh/fund/BFI82U?dayDate=20261016&type=day&response=json",
+            "twse_twt38u": "https://www.twse.com.tw/rwd/zh/fund/TWT38U?date=20261016&response=json",
+            "tpex_insti_a": "https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?type=Daily&sect=EW&date=2026/10/16&response=json",
+            "tpex_insti_b": "https://www.tpex.org.tw/web/stock/3insti/daily_trade/3itrade_hedge_result.php?l=zh-tw&t=D&type=EW&d=115/10/16&o=json",
+            "finmind_datasets": "https://api.finmindtrade.com/api/v4/datasets",
+            "finmind_insti": "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id=2330&start_date=2026-10-12&end_date=2026-10-16",
+            "finmind_holding": "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockShareholding&data_id=2330&start_date=2026-10-12&end_date=2026-10-16",
+            "mops_insider": "https://mopsfin.twse.com.tw/opendata/t187ap11_L.csv",
+          }
+          for name, url in cands.items():
+              code, raw = get(url)
+              out = {"url": url, "http": code, "bytes": len(raw)}
+              try:
+                  out["sample"] = trim(json.loads(raw.decode("utf-8", "replace")))
+              except Exception:
+                  out["head"] = raw[:400].decode("utf-8", "replace")
+              save(name, out)
+              print(name, code, len(raw))
+          PY
+      - name: Commit samples
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add samples/tw/inst
+          git commit -m "tw-probe2: institutional endpoint samples" || echo "nothing to commit"
+          git pull --rebase -q || true
+          git push
