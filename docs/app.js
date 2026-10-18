@@ -345,23 +345,23 @@
     $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === m)));
     $('#tabs-us').hidden = m === 'tw';
     $('#tabs-tw').hidden = m !== 'tw';
-    if (m === 'tw') { if (!['tw', 'twwatch', 'twreport'].includes(state.tab)) state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
+    if (m === 'tw') { if (!['tw', 'twwatch', 'twheat', 'twreport'].includes(state.tab)) state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
   }
 
   function setTab(tab) {
     state.tab = tab;
     $$('#tabs-us button, #tabs-tw button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-    if (tab === 'tw' || tab === 'twwatch' || tab === 'twreport') state.twTab = tab;
-    const rep = tab === 'report' || tab === 'heat' || tab === 'twreport';
+    if (['tw', 'twwatch', 'twheat', 'twreport'].includes(tab)) state.twTab = tab;
+    const rep = ['report', 'heat', 'twreport', 'twheat'].includes(tab);
     const raise = tab === 'raise';
     const tw = tab === 'tw' || tab === 'twwatch';
     $('#report').hidden = !(tab === 'report' || tab === 'twreport');
-    $('#heat').hidden = tab !== 'heat';
+    $('#heat').hidden = tab !== 'heat' && tab !== 'twheat';
     $('.board').hidden = rep;
     $('#count').hidden = rep;
     if (rep) {
       ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise', '#legend-tw', '#tbl-tw', '#filters-tw'].forEach((q) => { $(q).hidden = true; });
-      if (tab === 'report') loadReport(false); else if (tab === 'twreport') loadReport(true); else renderHeat();
+      if (tab === 'report') loadReport(false); else if (tab === 'twreport') loadReport(true); else renderHeat(tab === 'twheat');
       return;
     }
     $('#tbl-tw').hidden = !tw;
@@ -394,9 +394,10 @@
   }
 
   // ── pillar heatmap ──────────────────────────────────────────────────────
-  function renderHeat() {
-    const top = state.rows.filter((r) => r.board === 'main').sort((a, b) => a.rank - b.rank).slice(0, 40);
-    const cols = [['growth', '成長'], ['validated', '驗證'], ['accessibility', '進場'], ['cool', '冷門度'], ['smart_score', '大戶']];
+  function renderHeat(tw = false) {
+    const src = tw ? state.tw || [] : state.rows;
+    const top = src.filter((r) => r.board === (tw ? 'tw_main' : 'main')).sort((a, b) => a.rank - b.rank).slice(0, 40);
+    const cols = [['growth', '成長'], ['validated', '驗證'], ['accessibility', '進場'], ['cool', '冷門度'], ...(tw ? [] : [['smart_score', '大戶']])];
     const val = (d, k) => (k === 'cool' ? (isNum(d.attention) ? 100 - d.attention : null) : d[k]);
     const cell = (v) => (isNum(v)
       ? `<td style="background:color-mix(in srgb, var(--valid) ${Math.round(clamp(v) * 0.85)}%, transparent)">${Math.round(v)}</td>`
@@ -405,7 +406,7 @@
     $('#heat-body').innerHTML = `<h3>前 40 名的四個面向</h3><p class="muted">顏色越深，這一項越強。「冷門度」是擁擠的反面，越高代表越少人注意。點任一列看詳情。</p>
       <div class="heat-scroll"><table class="heat"><thead><tr><th>#</th><th class="l">股票</th>${cols.map(([, l]) => `<th>${l}</th>`).join('')}<th>總分</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     $$('#heat-body tbody tr').forEach((tr) => {
-      const open = () => { const d = state.rows.find((r) => r.ticker === tr.dataset.t); if (d) openStock(d); };
+      const open = () => { const d = src.find((r) => r.ticker === tr.dataset.t); if (d) (tw ? openTwStock(d) : openStock(d)); };
       tr.addEventListener('click', open);
       tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
     });
