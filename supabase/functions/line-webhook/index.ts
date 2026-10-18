@@ -6,7 +6,7 @@ const env = (k) => (typeof Deno !== "undefined" ? Deno.env.get(k) : process.env[
 
 const TAGS = { insider_cluster: "內部人群買", insider_buy: "內部人買進", activist_13d: "13D 積極持有", new_5pct: "新增 5% 持有人" };
 const FLAGS = { short_runway: "現金撐不久", deep_loss: "虧損嚴重", high_debt: "高負債", dilution: "稀釋", thin_volume: "成交量薄",
-  micro_cap: "微型股", crowded: "擁擠", data_thin: "資料不足" };
+  micro_cap: "微型股", crowded: "擁擠", data_thin: "資料不足", high_pledge: "董監設質高", insider_selling: "內部人申報轉讓" };
 const COLORS = { growth: "#2fbf8f", validated: "#6f86f2", accessibility: "#f2b44a", attention: "#ee6a7b" };
 
 // ── formatting helpers ──────────────────────────────────────────────────────
@@ -15,6 +15,7 @@ export const usd = (n) => {
   const a = Math.abs(n);
   return (n < 0 ? "-" : "") + "$" + (a >= 1e9 ? (a / 1e9).toFixed(2) + "B" : a >= 1e6 ? (a / 1e6).toFixed(1) + "M" : a >= 1e3 ? (a / 1e3).toFixed(0) + "K" : a.toFixed(0));
 };
+export const spct = (n, d = 1) => (n == null || isNaN(n) ? "—" : (n > 0 ? "+" : "") + (n * 100).toFixed(d) + "%");
 export const pct = (n, sign = true) => (n == null || isNaN(n) ? "—" : (sign && n > 0 ? "+" : "") + (n * 100).toFixed(0) + "%");
 const num = (n, d = 1) => (n == null || isNaN(n) ? "—" : Number(n).toFixed(d));
 // Taiwan dollars: 1.2 兆 / 350 億 / 980 萬
@@ -57,10 +58,10 @@ export const withQuick = (msgs, items) => {
   return out;
 };
 const MAIN_QUICK = [qr("今日", "今日"), qr("榜單", "榜單"), qr("自選", "自選"), qr("週報", "週報"), qr("大戶", "大戶"), qr("台股", "台股"), qr("更多功能", "更多功能")];
-const TW_QUICK = [qr("台股今日", "台股今日"), qr("台股榜單", "台股"), qr("自選", "自選"), qr("台股週報", "台股週報"), qr("台股成績單", "台股成績單"), qr("美股榜單", "榜單")];
+const TW_QUICK = [qr("台股今日", "台股今日"), qr("台股榜單", "台股"), qr("自選", "自選"), qr("台股週報", "台股週報"), qr("台股法人", "台股法人"), qr("台股成績單", "台股成績單"), qr("美股榜單", "榜單")];
 // rich menu cells, left→right, top→bottom. The image (docs/richmenu.png) is drawn by scripts/make_richmenu.py in the same order.
 export const MENU = ["今日", "榜單", "自選", "週報", "大戶", "更多功能"];
-export const MENU_TW = ["台股今日", "台股", "自選", "台股週報", "台股成績單", "更多功能"];
+export const MENU_TW = ["台股今日", "台股", "自選", "台股週報", "台股法人", "更多功能"];
 const TICK = "(?:[A-Za-z][A-Za-z.\\-]{0,5}|\\d{4,6}[A-Za-z]?)";
 // words that start a command, for "did you mean" suggestions
 const COMMAND_WORDS = ["今日", "榜單", "自選", "週報", "大戶", "台股", "台股今日", "台股週報", "募資", "成績單", "提醒清單", "額度", "產業", "比較", "說明", "更多功能"];
@@ -89,6 +90,7 @@ export function parseCommand(raw) {
     if (/^(今日|今天)$/.test(rest)) return { cmd: "today", tw: true };
     if (/^(週報|周報|本週)$/.test(rest)) return { cmd: "week", tw: true };
     if (/^(成績單|成績)$/.test(rest)) return { cmd: "report", tw: true };
+    if (/^(法人|大戶|三大法人)$/.test(rest)) return { cmd: "smart", tw: true };
     const ind = rest.match(/^產業\s*(.*)$/);
     if (ind) return { cmd: "industry", tw: true, q: ind[1].trim() };
     const inner = parseCommand(rest);
@@ -235,7 +237,9 @@ export function compareCard(A, B, tw = false) {
 
 // Taiwan stock card: monthly revenue instead of quarterly, NT$, 上市/上櫃, no smart-money layer
 export function twStockCard(s, extra = {}) {
-  const flags = (s.flags || []).map((f) => FLAGS[f] || f);
+  const flags = (s.flags || []).filter((f) => f !== "inst_buy").map((f) => FLAGS[f] || f);
+  const instBuy = (s.flags || []).includes("inst_buy");
+  const tone = (v) => ({ color: v > 0 ? "#2fbf8f" : v < 0 ? "#ee6a7b" : "#eef1f8" });
   const delta = s.score_7d != null ? s.score - s.score_7d : null;
   const body = [
     { type: "box", layout: "horizontal", contents: [
@@ -253,6 +257,10 @@ export function twStockCard(s, extra = {}) {
     row("股價", s.price != null ? "NT$ " + num(s.price, 2) : "—"),
     row("月營收年增" + (s.ym ? `（${s.ym}）` : ""), pct(s.rev_yoy)), row("累計營收年增", pct(s.rev_cum_yoy)),
     row("6 個月強度（對大盤）", pct(s.rs_6m)), row("市值", twd(s.mkt_cap)), row("日成交值", twd(s.dollar_vol)),
+    ...(s.inst_20d != null ? [row("三大法人 20 日（佔量）", spct(s.inst_20d), tone(s.inst_20d))] : []),
+    ...(s.foreign_20d != null || s.trust_20d != null ? [row("外資／投信 20 日", spct(s.foreign_20d) + "／" + spct(s.trust_20d))] : []),
+    ...(s.pledge_ratio != null ? [row("董監設質", (s.pledge_ratio * 100).toFixed(0) + "%", s.pledge_ratio >= 0.3 ? { color: "#ee6a7b" } : {})] : []),
+    ...(instBuy ? [row("訊號", "法人買超", { color: "#2fbf8f", weight: "bold" })] : []),
     ...(extra.sectorRank ? [row("產業內排名", `第 ${extra.sectorRank[0]} / ${extra.sectorRank[1]}`)] : []),
     ...(flags.length ? [row("風險", flags.join("、"), { color: "#ee6a7b" })] : []),
     dataLine(s.as_of, true),
@@ -292,7 +300,7 @@ export function helpText() {
     "【台股】",
     "2330／台積電　台股個股卡片",
     "台股（台股 2 翻頁）・台股今日・台股週報",
-    "台股成績單・台股產業 半導體",
+    "台股法人・台股成績單・台股產業 半導體",
     "",
     "【其他】",
     "更多功能　募資、成績單、產業、額度、儀表板",
@@ -319,7 +327,7 @@ export function moreCard(dash, oneTime = false) {
     txt("更多功能", { size: "md", weight: "bold", color: "#eef1f8" }),
     pair(btn("募資", "募資"), btn("成績單", "成績單")),
     pair(btn("提醒清單", "提醒清單"), btn("額度", "額度")),
-    pair(btn("台股榜單", "台股"), btn("台股今日", "台股今日")),
+    pair(btn("台股成績單", "台股成績單"), btn("台股產業", "台股產業")),
     pair(btn("產業分布", "產業"), btn("全部指令", "說明")),
     ...(oneTime ? [txt("儀表板按鈕免登入，1 小時內有效、只能用一次。", { size: "xxs", color: "#8a93a6", margin: "md" })] : []),
   ];
@@ -439,6 +447,29 @@ export async function dashLink(db, dash, ticker) {
     const url = await db.magicLink(target);
     return url ? { url, oneTime: true } : { url: plain, oneTime: false };
   } catch (_) { return { url: plain, oneTime: false }; }
+}
+
+// Taiwan "big money": 三大法人 net buying (share of traded volume) and director pledging
+async function twFlows(cmd, db) {
+  const enc = encodeURIComponent;
+  if (cmd.ticker) {
+    const r = (await db.get(`tw_latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`))[0];
+    if (!r) return [{ type: "text", text: `找不到 ${cmd.ticker}。` }];
+    if (r.inst_20d == null && r.pledge_ratio == null) return withQuick([{ type: "text", text: `${r.ticker} ${r.name || ""} 還沒有法人資料。` }], [qr(r.ticker, r.ticker)]);
+    const lines = [`${r.ticker} ${r.name || ""}　法人動向（買賣超佔成交量）`,
+      `三大法人　5 日 ${spct(r.inst_5d)}　20 日 ${spct(r.inst_20d)}`,
+      `外資 20 日 ${spct(r.foreign_20d)}　投信 20 日 ${spct(r.trust_20d)}`,
+      ...(r.pledge_ratio != null ? [`董監設質 ${(r.pledge_ratio * 100).toFixed(0)}%${r.pledge_ratio >= 0.3 ? "（偏高）" : ""}`] : []),
+      ...((r.flags || []).includes("insider_selling") ? ["內部人近期申報轉讓持股"] : []),
+      "參考線索，不計入分數。"];
+    return withQuick([{ type: "text", text: lines.join("\n") }], [qr(r.ticker, r.ticker), qr("台股法人", "台股法人")]);
+  }
+  const rows = await db.get("tw_latest_board?board=eq.tw_main&inst_20d=gt.0&order=inst_20d.desc&limit=10&select=ticker,name,inst_20d,foreign_20d,trust_20d,as_of,board").catch(() => []);
+  if (!rows.length) return withQuick([{ type: "text", text: "台股主榜目前沒有法人買超資料。" }], TW_QUICK);
+  const body = [txt("台股主榜　三大法人 20 日買超", { weight: "bold", color: "#eef1f8" }), txt("買超佔成交量，參考線索，不計入分數", { size: "xs", color: "#8a93a6" })];
+  rows.forEach((r) => body.push(tapRow(spct(r.inst_20d), r.ticker + "  " + (r.name || "").slice(0, 8), "外 " + spct(r.foreign_20d, 0) + " 投 " + spct(r.trust_20d, 0), r.ticker)));
+  body.push(dataLine(rows[0].as_of, true));
+  return withQuick([flex("台股法人買超", bubble(body))], TW_QUICK);
 }
 
 async function twStock(cmd, db, dash) {
@@ -585,7 +616,7 @@ export async function run(cmd, db, ctx) {
       return withQuick([{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }], [qr("自選", "自選"), ...(isTw(cmd.ticker) ? [] : [qr("設提醒", "提醒 " + cmd.ticker)])]);
     }
     case "smart": {
-      if (cmd.ticker && isTw(cmd.ticker)) return withQuick([{ type: "text", text: "台股目前沒有大戶（內部人申報）資料。" }], [qr(cmd.ticker, cmd.ticker)]);
+      if (cmd.tw || (cmd.ticker && isTw(cmd.ticker))) return twFlows(cmd, db);
       if (cmd.ticker) {
         const one = await db.get(`smart_money?ticker=eq.${enc(cmd.ticker)}&limit=1`);
         if (!one.length || !(one[0].tags || []).length) return withQuick([{ type: "text", text: `${cmd.ticker} 目前沒有大戶訊號。` }], [qr(cmd.ticker, cmd.ticker)]);

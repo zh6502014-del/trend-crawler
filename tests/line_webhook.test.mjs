@@ -280,7 +280,13 @@ test("Taiwan top list, compare and unsupported features", async () => {
   const mixed = await run(parseCommand("比較 NRXS 2330"), mkDb({}), {});
   assert.match(mixed[0].text, /不能直接比/);
   assert.match((await run(parseCommand("提醒 2330 分數>80"), mkDb({}), {}))[0].text, /還沒支援/);
-  assert.match((await run(parseCommand("大戶 2330"), mkDb({}), {}))[0].text, /沒有大戶/);
+  const flows = await run(parseCommand("大戶 2330"), mkDb({ "tw_latest_board?ticker=eq.2330": [{ ...twRow, inst_5d: 0.04, inst_20d: 0.08, foreign_20d: 0.06, trust_20d: 0.01, pledge_ratio: 0.35 }] }), {});
+  assert.match(flows[0].text, /三大法人　5 日 \+4\.0%　20 日 \+8\.0%/); assert.match(flows[0].text, /董監設質 35%（偏高）/);
+  const list = await run(parseCommand("台股法人"), mkDb({ "tw_latest_board?board=eq.tw_main&inst_20d": [{ ...twRow, inst_20d: 0.08, foreign_20d: 0.06, trust_20d: 0.01 }] }), {});
+  assert.match(JSON.stringify(list[0]), /三大法人 20 日買超/);
+  const card = await run(parseCommand("2330"), mkDb({ "tw_latest_board?ticker=eq.2330": [{ ...twRow, inst_20d: -0.02, pledge_ratio: 0.1, flags: ["inst_buy", "high_pledge"] }], "user_watch": [] }), {});
+  const cs = JSON.stringify(card[0]);
+  assert.match(cs, /三大法人 20 日/); assert.match(cs, /-2\.0%/); assert.match(cs, /法人買超/); assert.match(cs, /董監設質高/);
 });
 
 test("watchlist splits US and Taiwan", async () => {
