@@ -1,0 +1,39 @@
+{
+ "url": "https://www.twse.com.tw/rwd/zh/fund/BFI82U?dayDate=20261016&type=day&response=json",
+ "http": 200,
+ "bytes": 1572,
+ "sample": {
+  "stat": "OK",
+  "date": "20261016",
+  "title": "115年10月16日 三大法人買賣金額統計表",
+  "fields": [
+   "單位名稱",
+   "買進金額"
+  ],
+  "data": [
+   [
+    "自營商(自行買賣)",
+    "8,381,436,969"
+   ],
+   [
+    "自營商(避險)",
+    "28,653,271,647"
+   ]
+  ],
+  "params": {
+   "dayDate": "20261016",
+   "type": "day",
+   "response": "json",
+   "controller": "fund",
+   "action": "BFI82U",
+   "lang": "zh",
+   "monthDate": null,
+   "weekDate": null
+  },
+  "notes": [
+   "自營商表示證券自營商專戶。",
+   "投信表示本國投資信託基金。"
+  ],
+  "hints": "單位：元"
+ }
+}
