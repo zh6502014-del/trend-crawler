@@ -1,0 +1,166 @@
+{
+ "market": "us",
+ "dates": [
+  "2024-11-30",
+  "2024-12-31",
+  "2025-01-31",
+  "2025-02-28",
+  "2025-03-31",
+  "2025-04-30",
+  "2025-05-31",
+  "2025-06-30",
+  "2025-07-31",
+  "2025-08-31",
+  "2025-09-30",
+  "2025-10-31",
+  "2025-11-30",
+  "2025-12-31",
+  "2026-01-31",
+  "2026-02-28",
+  "2026-03-31",
+  "2026-04-30",
+  "2026-05-31",
+  "2026-06-30",
+  "2026-07-31",
+  "2026-08-31",
+  "2026-09-30"
+ ],
+ "rows": 33555,
+ "summary": {
+  "cheap_1m": {
+   "months": 22,
+   "ic_mean": 0.0183,
+   "ic_t": 0.84,
+   "ic_pos_share": 0.682,
+   "q1_to_q5": [
+    0.0111,
+    0.007,
+    0.0085,
+    0.0049,
+    0.013
+   ],
+   "spread_q5_q1": 0.0019,
+   "spread_pos_share": 0.591,
+   "universe_mean": 0.0069
+  },
+  "growth_1m": {
+   "months": 22,
+   "ic_mean": 0.0232,
+   "ic_t": 1.87,
+   "ic_pos_share": 0.682,
+   "q1_to_q5": [
+    0.007,
+    0.0027,
+    0.0078,
+    0.0118,
+    0.0153
+   ],
+   "spread_q5_q1": 0.0083,
+   "spread_pos_share": 0.727,
+   "universe_mean": 0.0069
+  },
+  "growth_cheap_1m": {
+   "months": 22,
+   "ic_mean": 0.0329,
+   "ic_t": 2.44,
+   "ic_pos_share": 0.636,
+   "q1_to_q5": [
+    0.0055,
+    0.0036,
+    0.0087,
+    0.0115,
+    0.0152
+   ],
+   "spread_q5_q1": 0.0097,
+   "spread_pos_share": 0.545,
+   "universe_mean": 0.0069
+  },
+  "psg_1m": {
+   "months": 22,
+   "ic_mean": 0.0278,
+   "ic_t": 1.89,
+   "ic_pos_share": 0.682,
+   "q1_to_q5": [
+    0.0059,
+    0.0052,
+    0.0077,
+    0.0087,
+    0.0171
+   ],
+   "spread_q5_q1": 0.0112,
+   "spread_pos_share": 0.636,
+   "universe_mean": 0.0069
+  },
+  "cheap_3m": {
+   "months": 20,
+   "ic_mean": 0.0333,
+   "ic_t": 1.94,
+   "ic_pos_share": 0.6,
+   "q1_to_q5": [
+    0.0498,
+    0.0321,
+    0.035,
+    0.0346,
+    0.0511
+   ],
+   "spread_q5_q1": 0.0014,
+   "spread_pos_share": 0.5,
+   "universe_mean": 0.0379
+  },
+  "growth_3m": {
+   "months": 20,
+   "ic_mean": 0.0162,
+   "ic_t": 1.24,
+   "ic_pos_share": 0.75,
+   "q1_to_q5": [
+    0.04,
+    0.0295,
+    0.0323,
+    0.0401,
+    0.0607
+   ],
+   "spread_q5_q1": 0.0207,
+   "spread_pos_share": 0.75,
+   "universe_mean": 0.0379
+  },
+  "growth_cheap_3m": {
+   "months": 20,
+   "ic_mean": 0.0381,
+   "ic_t": 3.99,
+   "ic_pos_share": 0.85,
+   "q1_to_q5": [
+    0.0291,
+    0.0314,
+    0.0418,
+    0.0504,
+    0.0499
+   ],
+   "spread_q5_q1": 0.0208,
+   "spread_pos_share": 0.7,
+   "universe_mean": 0.0379
+  },
+  "psg_3m": {
+   "months": 20,
+   "ic_mean": 0.0352,
+   "ic_t": 3.11,
+   "ic_pos_share": 0.7,
+   "q1_to_q5": [
+    0.0313,
+    0.0319,
+    0.0354,
+    0.0462,
+    0.0578
+   ],
+   "spread_q5_q1": 0.0265,
+   "spread_pos_share": 0.75,
+   "universe_mean": 0.0379
+  }
+ },
+ "limits": [
+  "universe = companies listed today (survivorship bias)",
+  "only about 24 monthly observations (price history is ~2 years on the free plan)",
+  "overlapping windows; months are not independent",
+  "shares outstanding from the cover page of each filing"
+ ],
+ "generated": "2026-10-18T12:29:06.204751+00:00"
+}
