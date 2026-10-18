@@ -39,6 +39,10 @@ PRICE_SERIES_TOP_N = 250       # tickers per run that get a stored price series 
 # Geometric mean = multiplicative: a near-zero pillar drags the whole score down (power-law logic).
 GROWTH_W = {"rev_yoy": 0.6, "rs_6m": 0.4}
 VALIDATED_W = {"streak": 0.6, "gross_margin": 0.4}
+# Banks, insurers and other financials report no gross profit, so "gross_margin" would always be missing for them.
+# For rows whose sector equals FINANCIAL_SECTOR (the label industry.py gives SIC 6000-6499 and 6700-6799, SPACs excluded),
+# net margin (profit_margin) takes gross margin's place in the "validated" pillar, ranked only against other financials.
+FINANCIAL_SECTOR = "金融與保險"
 PILLAR_W = {"growth": 1.0, "validated": 1.0, "accessibility": 1.0}
 # analyst_count / inst_pct are not available from SEC data (weight 0). Crowding = Hacker News + trading activity.
 ATTENTION_W = {"analyst_count": 0.0, "inst_pct": 0.0, "hn_mentions": 0.5, "dollar_vol": 0.5}

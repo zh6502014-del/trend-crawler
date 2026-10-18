@@ -62,6 +62,58 @@ def test_multiplicative_pillars_punish_a_zero():
     assert score.compute_scores(strong).loc["T001", "score"] > score.compute_scores(weak).loc["T001", "score"]
 
 
+def _fin_universe():
+    d = make_universe(60)
+    d["sector"] = "其他"
+    d.loc[d.index[:20], "sector"] = cfg.FINANCIAL_SECTOR      # 20 financials, no gross profit
+    d.loc[d.index[:20], "gross_margin"] = np.nan
+    d["profit_margin"] = np.random.default_rng(7).uniform(-0.1, 0.4, len(d))
+    return d
+
+
+def test_financial_sector_label_matches_industry_table():
+    from crawler import industry
+    assert industry.sector_of(6022) == cfg.FINANCIAL_SECTOR and industry.sector_of(6311) == cfg.FINANCIAL_SECTOR
+    assert industry.sector_of(6770) != cfg.FINANCIAL_SECTOR      # SPACs stay out
+
+
+def test_financials_are_not_flagged_for_missing_gross_margin():
+    d = _fin_universe()
+    out = score.compute_scores(d)
+    fin = out[out["sector"] == cfg.FINANCIAL_SECTOR]
+    assert not fin["flags"].map(lambda f: "data_thin" in f).any()
+    # the same rows without the sector label are data_thin, as before
+    plain = score.compute_scores(d.drop(columns="sector"))
+    assert plain.loc[fin.index, "flags"].map(lambda f: "data_thin" in f).all()
+
+
+def test_financials_without_net_margin_are_still_thin():
+    d = _fin_universe()
+    t = d.index[0]
+    d.loc[t, "profit_margin"] = np.nan
+    assert "data_thin" in score.compute_scores(d).loc[t, "flags"]
+
+
+def test_financial_net_margin_is_ranked_only_against_financials():
+    d = _fin_universe()
+    hi, lo = d.index[0], d.index[1]
+    d.loc[hi, "profit_margin"], d.loc[lo, "profit_margin"] = 0.9, -0.5
+    out = score.compute_scores(d)
+    assert out.loc[hi, "validated"] > out.loc[lo, "validated"]
+    # the best bank gets the top percentile of its own group even though non-financials have wide margins
+    d2 = d.copy()
+    d2.loc[d2["sector"] != cfg.FINANCIAL_SECTOR, "profit_margin"] = 5.0
+    assert score.compute_scores(d2).loc[hi, "validated"] == out.loc[hi, "validated"]
+
+
+def test_non_financial_scores_unchanged_by_the_sector_column():
+    d = make_universe(80)
+    base = score.compute_scores(d)
+    labelled = score.compute_scores(d.assign(sector="其他"))
+    pd.testing.assert_series_equal(base["score"], labelled["score"])
+    assert (base["board"] == labelled["board"]).all()
+
+
 def test_gates_send_names_to_watch():
     d = make_universe(50)
     d.loc["T000", "dollar_vol"] = 50_000      # too thin

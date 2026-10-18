@@ -91,6 +91,14 @@ def run_public(store) -> dict:
         for t, s in zip(df.index, df["shares_out"])
     ]
 
+    ind = {}
+    try:  # industry labels come first: financials are scored on net margin instead of gross margin
+        ind = industry.fill(store, list(df.index), ciks)
+    except Exception as e:  # noqa: BLE001 - labels are optional
+        print(f"  industry skipped: {e!r}")
+    df["sector"] = [(ind.get(t) or {}).get("sector") for t in df.index]
+    stats["financials"] = int(df["sector"].map(score.is_financial).sum())
+
     scored = score.compute_scores(df)
     stats["main"] = int((scored["board"] == "main").sum())
     stats["watch"] = int((scored["board"] == "watch").sum())
@@ -98,11 +106,6 @@ def run_public(store) -> dict:
     # ── write ──
     now = utcnow().isoformat()
     ex = dict(zip(uni["ticker"], uni["exchange"])) if "exchange" in uni else {}
-    ind = {}
-    try:
-        ind = industry.fill(store, list(scored.index), ciks)
-    except Exception as e:  # noqa: BLE001 - labels are optional
-        print(f"  industry skipped: {e!r}")
     store.upsert("entities", [
         {"ticker": t, "name": names.get(t), "sector": ind.get(t, {}).get("sector") or r.get("sector"),
          "industry": ind.get(t, {}).get("industry") or r.get("industry"),

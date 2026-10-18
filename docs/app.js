@@ -48,7 +48,7 @@
     thin_volume: { label: '成交薄', tone: 'warn', help: '日均成交額偏低，小額也可能買貴、賣不掉。' },
     micro_cap: { label: '市值極小', tone: 'warn', help: '市值很小，價格波動與資訊落差都會放大。' },
     crowded: { label: '已擁擠', tone: '', help: 'Hacker News 提及與成交額都偏高，已經有不少人注意到，資訊落差變小。' },
-    data_thin: { label: '資料不足', tone: '', help: '季度財報不足四季或缺毛利率，這個分數可信度較低。' },
+    data_thin: { label: '資料不足', tone: '', help: '季度財報不足四季或缺毛利率（金融業看淨利率），這個分數可信度較低。' },
   };
   const RISK = new Set(['short_runway', 'deep_loss', 'high_debt', 'dilution']);
 

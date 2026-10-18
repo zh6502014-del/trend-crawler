@@ -4,6 +4,7 @@
 
 growth        how fast revenue and relative price strength are rising (percentile within today's universe)
 validated     is the growth real? consecutive quarters of revenue growth + gross margin
+              (financials, which report no gross profit, use net margin ranked among financials instead)
 accessibility can a small account actually buy it? liquidity + market-cap sweet spot
 attention     how crowded is the name? analysts, institutions, Hacker News. HIGH = crowded = penalised
 """
@@ -40,6 +41,15 @@ def cap_score(cap: pd.Series) -> pd.Series:
     return s.clip(0, 1)
 
 
+def is_financial(sector) -> bool:
+    return isinstance(sector, str) and sector == cfg.FINANCIAL_SECTOR
+
+
+def quality_margin(r: pd.Series):
+    """The margin that backs 'validated': gross margin normally, net margin for financials."""
+    return r.get("profit_margin") if is_financial(r.get("sector")) else r.get("gross_margin")
+
+
 def build_flags(r: pd.Series) -> list[str]:
     f: list[str] = []
     if pd.notna(r.get("runway_months")) and r["runway_months"] < cfg.RUNWAY_MONTHS_WARN:
@@ -57,7 +67,7 @@ def build_flags(r: pd.Series) -> list[str]:
     if r["attention"] >= cfg.CROWDED_ATTENTION:
         f.append("crowded")
     q = r.get("quarters")
-    if pd.isna(q) or q < 4 or pd.isna(r.get("gross_margin")):
+    if pd.isna(q) or q < 4 or pd.isna(quality_margin(r)):
         f.append("data_thin")
     return f
 
@@ -72,6 +82,9 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
                 "profit_margin", "debt_to_equity", "dilution", "quarters"):
         if col not in d:
             d[col] = np.nan
+    if "sector" not in d:
+        d["sector"] = None
+    fin = d["sector"].map(is_financial).astype(bool)
     miss = cfg.MISSING_PCT
 
     growth = _wmean(
@@ -79,8 +92,12 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
         cfg.GROWTH_W,
     )
     streak = (pd.to_numeric(d["rev_streak"], errors="coerce").clip(0, 4) / 4).fillna(0)
+    margin = pd.Series(np.nan, index=d.index)  # percentile of gross margin (financials: net margin), within each group
+    for mask, col in ((~fin, "gross_margin"), (fin, "profit_margin")):
+        if mask.any():
+            margin[mask] = _pct(d.loc[mask, col])
     validated = _wmean(
-        pd.DataFrame({"streak": streak, "gross_margin": _pct(d["gross_margin"]).fillna(miss)}),
+        pd.DataFrame({"streak": streak, "gross_margin": margin.fillna(miss)}),
         cfg.VALIDATED_W,
     )
     liq = (np.log10(d["dollar_vol"].clip(lower=1) / cfg.MIN_DOLLAR_VOL) / 2).clip(0, 1)
