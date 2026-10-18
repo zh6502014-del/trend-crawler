@@ -1,7 +1,7 @@
 // Run: node --test tests/line_webhook.test.mjs   (Node 22.18+ strips the .ts types natively)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText } from "../supabase/functions/line-webhook/index.ts";
+import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText, dashLink } from "../supabase/functions/line-webhook/index.ts";
 
 const at = (iso) => new Date(iso);
 
@@ -196,4 +196,34 @@ test("batch add reports found and missing tickers in one write", async () => {
 
 test("help text stays short enough for one LINE message", () => {
   assert.ok(helpText().length < 600);
+});
+
+test("dashboard: one-time sign-in link, with ticker and fallbacks", async () => {
+  assert.deepEqual(parseCommand("儀表板"), { cmd: "dash" });
+  assert.deepEqual(parseCommand("儀表板 nrxs"), { cmd: "dash", ticker: "NRXS" });
+  const asked = [];
+  const db = mkDb({ "latest_board?ticker=eq.NRXS": [board] });
+  db.magicLink = async (to) => { asked.push(to); return "https://p.supabase.co/auth/v1/verify?token=x&redirect_to=" + encodeURIComponent(to); };
+  const a = await dashLink(db, "https://u.github.io/trend", "NRXS");
+  assert.equal(a.oneTime, true);
+  assert.equal(asked[0], "https://u.github.io/trend/?t=NRXS");          // ticker in the query: the hash carries the tokens
+  db.magicLink = async () => null;                                     // admin call failed → plain deep link
+  assert.deepEqual(await dashLink(db, "https://u.github.io/trend", "NRXS"), { url: "https://u.github.io/trend/#t=NRXS", oneTime: false });
+  db.magicLink = async () => { throw new Error("down"); };
+  assert.equal((await dashLink(db, "https://u.github.io/trend")).url, "https://u.github.io/trend");
+  assert.deepEqual(await dashLink(db, ""), { url: "", oneTime: false });
+});
+
+test("stock card and 更多 carry the sign-in link", async () => {
+  process.env.DASHBOARD_URL = "https://u.github.io/trend/";
+  const db = mkDb({ "latest_board?ticker=eq.NRXS": [board], "user_watch": [] });
+  db.magicLink = async () => "https://p.supabase.co/auth/v1/verify?token=abc";
+  const card = await run({ cmd: "stock", ticker: "NRXS" }, db, {});
+  assert.match(JSON.stringify(card[0]), /verify\?token=abc/);
+  const more = await run({ cmd: "more" }, db, {});
+  assert.match(JSON.stringify(more[0]), /verify\?token=abc/);
+  assert.match(JSON.stringify(more[0]), /只能用一次/);
+  const d = await run({ cmd: "dash", ticker: "NRXS" }, db, {});
+  assert.match(JSON.stringify(d[0]), /verify\?token=abc/);
+  delete process.env.DASHBOARD_URL;
 });

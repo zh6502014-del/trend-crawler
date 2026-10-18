@@ -63,6 +63,8 @@ export function parseCommand(raw) {
   if (/^(說明|help|\?|指令|選單)$/.test(low)) return { cmd: "help" };
   if (/^(設定選單|setup menu)$/.test(low)) return { cmd: "menu" };
   if (/^(更多功能|功能|工具|more)$/.test(low)) return { cmd: "more" };
+  const dm = t.match(/^(儀表板|dashboard|網頁)\s*([A-Za-z][A-Za-z.\-]{0,5})?$/i);
+  if (dm) return { cmd: "dash", ...(dm[2] ? { ticker: dm[2].toUpperCase() } : {}) };
   const pg = low.match(/^(榜單|前十|top|top10|主榜)\s*(?:第)?\s*(\d{1,2})?\s*(?:頁)?$/);
   if (pg) return { cmd: "top", page: Math.min(15, Math.max(1, Number(pg[2] || 1))) };
   if (/^(下一頁|next|更多)$/.test(low)) return { cmd: "top", page: 2 };
@@ -157,7 +159,7 @@ export function stockCard(s, smart, dash, extra = {}) {
     ...(flags.length ? [row("風險", flags.join("、"), { color: "#ee6a7b" })] : []),
     dataLine(s.as_of),
   ];
-  const url = deepLink(dash, s.ticker);
+  const url = extra.url || deepLink(dash, s.ticker);
   return flex(`${s.ticker} 分數 ${num(s.score)}`, bubble(body, url ? [link(url, "在儀表板開啟")] : null));
 }
 
@@ -246,7 +248,7 @@ export function suggest(text, words = COMMAND_WORDS) {
   return scored.slice(0, 4).map((x) => x.w);
 }
 
-export function moreCard(dash) {
+export function moreCard(dash, oneTime = false) {
   const btn = (label, text) => ({ type: "button", style: "secondary", height: "sm", flex: 1, action: { type: "message", label, text } });
   const pair = (a, b) => ({ type: "box", layout: "horizontal", spacing: "sm", contents: [a, b] });
   const body = [
@@ -254,6 +256,7 @@ export function moreCard(dash) {
     pair(btn("募資", "募資"), btn("成績單", "成績單")),
     pair(btn("提醒清單", "提醒清單"), btn("額度", "額度")),
     pair(btn("產業分布", "產業"), btn("全部指令", "說明")),
+    ...(oneTime ? [txt("儀表板按鈕免登入，1 小時內有效、只能用一次。", { size: "xxs", color: "#8a93a6", margin: "md" })] : []),
   ];
   return flex("更多功能", bubble(body, dash ? [link(dash, "開啟儀表板")] : null));
 }
@@ -280,9 +283,29 @@ function makeDb(fetchFn) {
     const users = (await r.json()).users || [];
     if (!users.length) throw new Error("no dashboard user yet");
     uid = users[0].id;
+    email = users[0].email || null;
     return uid;
   };
-  return { get, send, ownerId };
+  // One-time sign-in link for the dashboard (Supabase admin generate_link): no email is sent, the link logs the
+  // owner straight in. Single use, expires with the project's OTP expiry (default 1 hour). Only ever sent to the owner.
+  let email = null;
+  const magicLink = async (redirectTo) => {
+    if (!email) {
+      const r = await fetchFn(base + "/auth/v1/admin/users?per_page=5", { headers: h, ...sig() });
+      if (!r.ok) return null;
+      const users = (await r.json()).users || [];
+      const u = uid ? users.find((x) => x.id === uid) : users[0];
+      email = (u && u.email) || null;
+    }
+    if (!email) return null;
+    const r = await fetchFn(base + "/auth/v1/admin/generate_link", {
+      method: "POST", headers: h, body: JSON.stringify({ type: "magiclink", email, redirect_to: redirectTo }), ...sig(),
+    });
+    if (!r.ok) { console.error("generate_link", r.status, (await r.text()).slice(0, 200)); return null; }
+    const j = await r.json();
+    return j.action_link || (j.properties && j.properties.action_link) || null;
+  };
+  return { get, send, ownerId, magicLink };
 }
 
 // ── pure summaries (exported for tests) ─────────────────────────────────────
@@ -334,12 +357,33 @@ export async function findByName(db, q) {
 }
 
 // ── command handlers → array of LINE message objects ────────────────────────
+// dashboard URL that signs the owner in without email; falls back to the plain URL
+export async function dashLink(db, dash, ticker) {
+  if (!dash) return { url: "", oneTime: false };
+  const plain = ticker ? deepLink(dash, ticker) : dash;
+  if (!db.magicLink) return { url: plain, oneTime: false };
+  try {
+    const target = dash.replace(/\/?$/, "/") + (ticker ? "?t=" + encodeURIComponent(ticker) : "");
+    const url = await db.magicLink(target);
+    return url ? { url, oneTime: true } : { url: plain, oneTime: false };
+  } catch (_) { return { url: plain, oneTime: false }; }
+}
+
 export async function run(cmd, db, ctx) {
   const dash = env("DASHBOARD_URL");
   const enc = encodeURIComponent;
   switch (cmd.cmd) {
     case "help": return withQuick([{ type: "text", text: helpText() }], MAIN_QUICK);
-    case "more": return withQuick([moreCard(dash)], MAIN_QUICK.slice(0, 5));
+    case "more": {
+      const d = await dashLink(db, dash);
+      return withQuick([moreCard(d.url, d.oneTime)], MAIN_QUICK.slice(0, 5));
+    }
+    case "dash": {
+      const d = await dashLink(db, dash, cmd.ticker);
+      if (!d.url) return [{ type: "text", text: "還沒設定 DASHBOARD_URL。" }];
+      return [flex("開啟儀表板", bubble([txt(cmd.ticker ? `在儀表板開啟 ${cmd.ticker}` : "開啟儀表板", { weight: "bold", color: "#eef1f8" }),
+        ...(d.oneTime ? [txt("免登入，1 小時內有效、只能用一次。", { size: "xs", color: "#8a93a6" })] : [])], [link(d.url, "開啟")]))];
+    }
     case "stock": {
       const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
       if (!rows.length) {
@@ -363,6 +407,7 @@ export async function run(cmd, db, ctx) {
         watching = (await db.get(`user_watch?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`)).length > 0;
       } catch (_) { /* buttons still work without knowing the watch state */ }
       const t = cmd.ticker;
+      extra.url = (await dashLink(db, dash, t)).url;
       return withQuick([stockCard(rows[0], sm[0], dash, extra)], [
         watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("大戶訊號", "大戶 " + t), qr("榜單", "榜單"),
       ]);

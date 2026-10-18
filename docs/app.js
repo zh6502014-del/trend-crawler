@@ -715,9 +715,10 @@
   }
   const beats = (v) => (isNum(v) ? `在今天被評分的股票裡，約贏過 ${Math.round(clamp(v))}% 的同類。` : '');
 
-  // Deep link from the LINE bot: index.html#t=NRXS opens that stock's drawer once the table is ready.
+  // Deep link from the LINE bot: index.html#t=NRXS (or ?t=NRXS, used by the one-time sign-in link, whose tokens
+  // arrive in the hash) opens that stock's drawer once the table is ready.
   function openFromLink() {
-    const m = /(?:^|[#&])t=([A-Za-z0-9.\-]{1,8})/.exec(location.hash || '');
+    const m = /(?:^|[#&])t=([A-Za-z0-9.\-]{1,8})/.exec(location.hash || '') || /(?:^|[?&])t=([A-Za-z0-9.\-]{1,8})/.exec(location.search || '');
     if (!m || state.linkDone) return;
     state.linkDone = true;
     const d = (state.rows || []).find((r) => r.ticker === m[1].toUpperCase());
