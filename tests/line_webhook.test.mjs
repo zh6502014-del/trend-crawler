@@ -1,7 +1,7 @@
 // Run: node --test tests/line_webhook.test.mjs   (Node 22.18+ strips the .ts types natively)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery } from "../supabase/functions/line-webhook/index.ts";
+import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText } from "../supabase/functions/line-webhook/index.ts";
 
 const at = (iso) => new Date(iso);
 
@@ -143,4 +143,57 @@ test("parse: compare, paging, natural add/del", () => {
   assert.equal(parseCommand("把 NRXS 加入自選").cmd, "add");
   assert.equal(parseCommand("把 NRXS 移出自選").cmd, "del");
   assert.equal(parseCommand("NRXS 怎麼樣").cmd, "stock");
+});
+
+test("menu and commands: cashtag, more, batch add/del", () => {
+  assert.equal(parseCommand("$nrxs").ticker, "NRXS");
+  assert.equal(parseCommand("更多功能").cmd, "more");
+  assert.equal(parseCommand("更多").cmd, "top");                 // still "next page"
+  assert.deepEqual(parseCommand("加 NRXS acog、TSLA").tickers, ["NRXS", "ACOG", "TSLA"]);
+  assert.deepEqual(parseCommand("刪 NRXS,ACOG").tickers, ["NRXS", "ACOG"]);
+  assert.equal(parseCommand("刪提醒 NRXS").cmd, "delalert");      // not swallowed by batch delete
+  assert.equal(parseCommand("加 NRXS").ticker, "NRXS");
+  // every rich-menu cell must be a real command
+  for (const t of MENU) assert.notEqual(parseCommand(t).cmd, "unknown", t);
+});
+
+test("suggest finds the intended command", () => {
+  assert.equal(suggest("榜")[0], "榜單");
+  assert.equal(suggest("週")[0], "週報");
+  assert.equal(suggest("今天怎樣")[0], "今日");
+  assert.deepEqual(suggest("zzz"), []);
+});
+
+test("unknown text replies with suggestions or main buttons", async () => {
+  const a = await run({ cmd: "unknown", text: "榜" }, mkDb({}), {});
+  assert.match(a[0].text, /你是不是要/);
+  assert.equal(a[0].quickReply.items[0].action.text, "榜單");
+  const b = await run({ cmd: "unknown", text: "zzzz" }, mkDb({}), {});
+  assert.ok(b[0].quickReply.items.length >= 5);
+});
+
+test("more card has buttons and a dashboard link", async () => {
+  process.env.DASHBOARD_URL = "https://x.github.io/trend/";
+  const out = await run({ cmd: "more" }, mkDb({}), {});
+  const s = JSON.stringify(out[0]);
+  assert.match(s, /募資/); assert.match(s, /成績單/); assert.match(s, /開啟儀表板/);
+  delete process.env.DASHBOARD_URL;
+});
+
+test("batch add reports found and missing tickers in one write", async () => {
+  const writes = [];
+  const db = mkDb({ "entities?ticker=in.": [{ ticker: "NRXS" }, { ticker: "ACOG" }] });
+  db.send = async (m, p, body) => writes.push({ m, p, body });
+  const out = await run(parseCommand("加 NRXS ACOG QQQQ"), db, {});
+  assert.match(out[0].text, /已加入自選：NRXS、ACOG/);
+  assert.match(out[0].text, /找不到：QQQQ/);
+  assert.equal(writes.length, 1); assert.equal(writes[0].body.length, 2);
+  const w2 = [];
+  db.send = async (m, p) => w2.push(p);
+  await run(parseCommand("刪 NRXS ACOG"), db, {});
+  assert.match(w2[0], /ticker=in\.\(NRXS,ACOG\)/);
+});
+
+test("help text stays short enough for one LINE message", () => {
+  assert.ok(helpText().length < 600);
 });

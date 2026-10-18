@@ -41,7 +41,12 @@ export const withQuick = (msgs, items) => {
   out[out.length - 1] = { ...out[out.length - 1], quickReply: { items: items.slice(0, 13) } };
   return out;
 };
-const MAIN_QUICK = [qr("榜單", "榜單"), qr("自選", "自選"), qr("今日", "今日"), qr("週報", "週報"), qr("大戶", "大戶")];
+const MAIN_QUICK = [qr("今日", "今日"), qr("榜單", "榜單"), qr("自選", "自選"), qr("週報", "週報"), qr("大戶", "大戶"), qr("更多功能", "更多功能")];
+// rich menu cells, left→right, top→bottom. The image (docs/richmenu.png) is drawn by scripts/make_richmenu.py in the same order.
+export const MENU = ["今日", "榜單", "自選", "週報", "大戶", "更多功能"];
+const TICK = "[A-Za-z][A-Za-z.\\-]{0,5}";
+// words that start a command, for "did you mean" suggestions
+const COMMAND_WORDS = ["今日", "榜單", "自選", "週報", "大戶", "募資", "成績單", "提醒清單", "額度", "產業", "比較", "說明", "更多功能"];
 
 // ── name / alias lookup (stock names in the DB are mostly English; common Chinese names go here) ──
 export const ALIASES = {
@@ -52,11 +57,12 @@ export const cleanQuery = (q) => String(q || "").normalize("NFKC").replace(/[*%,
 
 // ── command parsing ─────────────────────────────────────────────────────────
 export function parseCommand(raw) {
-  let t = String(raw || "").normalize("NFKC").trim();
+  let t = String(raw || "").normalize("NFKC").trim().replace(/^\$(?=[A-Za-z])/, "");
   if (!t) return { cmd: "help" };
   const low = t.toLowerCase();
   if (/^(說明|help|\?|指令|選單)$/.test(low)) return { cmd: "help" };
   if (/^(設定選單|setup menu)$/.test(low)) return { cmd: "menu" };
+  if (/^(更多功能|功能|工具|more)$/.test(low)) return { cmd: "more" };
   const pg = low.match(/^(榜單|前十|top|top10|主榜)\s*(?:第)?\s*(\d{1,2})?\s*(?:頁)?$/);
   if (pg) return { cmd: "top", page: Math.min(15, Math.max(1, Number(pg[2] || 1))) };
   if (/^(下一頁|next|更多)$/.test(low)) return { cmd: "top", page: 2 };
@@ -76,10 +82,12 @@ export function parseCommand(raw) {
   if (m) return { cmd: "alert", ticker: m[2].toUpperCase(), metric: /分數|score/i.test(m[3]) ? "score" : "rank", op: m[4], value: Number(m[5]) };
   m = t.match(/^(提醒|alert)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
   if (m) return { cmd: "alertmenu", ticker: m[2].toUpperCase() };
-  m = t.match(/^(加|新增|add)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
-  if (m) return { cmd: "add", ticker: m[2].toUpperCase() };
-  m = t.match(/^(刪|刪除|移除|del|remove)\s*([A-Za-z][A-Za-z.\-]{0,5})$/i);
-  if (m) return { cmd: "del", ticker: m[2].toUpperCase() };
+  // one or several tickers: 加 NRXS ACOG、TSLA
+  m = t.match(new RegExp(`^(加|新增|add|刪|刪除|移除|del|remove)\\s*(${TICK}(?:\\s*[,，、\\s]\\s*${TICK}){0,9})$`, "i"));
+  if (m) {
+    const tickers = [...new Set(m[2].split(/[\s,，、]+/).filter(Boolean).map((x) => x.toUpperCase()))];
+    return { cmd: /^(加|新增|add)$/i.test(m[1]) ? "add" : "del", ticker: tickers[0], tickers };
+  }
   m = t.match(/^(筆記|note)\s*([A-Za-z][A-Za-z.\-]{0,5})\s*([\s\S]*)$/i);
   if (m) return { cmd: "note", ticker: m[2].toUpperCase(), text: m[3].trim() };
   m = t.match(/^(產業|industry)\s*(.*)$/i);
@@ -200,27 +208,54 @@ export function topCard(rows, title) {
 
 export function helpText() {
   return [
-    "指令（回覆免費）",
-    "NRXS　個股卡片（下方按鈕：加自選、設提醒、大戶）",
-    "輝達／apple　用名稱或常見別名找股票",
+    "指令（回覆都免費，不占推播額度）",
+    "",
+    "【查股票】",
+    "NRXS 或 $NRXS　個股卡片",
+    "輝達／apple　用名稱找",
     "比較 NRXS ACOG　兩檔並排",
-    "榜單 2　翻到第 2 頁",
-    "榜單　主榜前 10 名",
+    "",
+    "【每天看】",
+    "今日　比前一個交易日的變化",
+    "榜單（榜單 2 翻頁）　主榜排名",
+    "週報　7 日分數漲跌",
+    "大戶　內部人與大股東訊號",
+    "",
+    "【自選與提醒】",
     "自選　自選股現況",
-    "加 NRXS／刪 NRXS　改自選",
+    "加 NRXS ACOG／刪 NRXS　可一次多檔",
     "筆記 NRXS 內容　寫筆記",
-    "大戶　近期大戶訊號；大戶 NRXS 看單一個股",
-    "提醒 NRXS　列出建議條件按鈕",
-    "提醒 NRXS 分數>70　設提醒（觸發一次，每日摘要一起送）",
-    "提醒清單／刪提醒 NRXS　管理提醒",
-    "額度　本月 LINE 推播用量",
-    "今日　與前一個交易日比的變化",
-    "週報　7 日分數漲跌與自選股",
-    "產業 生技　該產業前 5 名",
-    "募資　Reg CF 近況",
-    "成績單　對 SPY 表現",
-    "設定選單　建立底部圖文選單",
+    "提醒 NRXS　點選條件設提醒",
+    "提醒清單／刪提醒 NRXS",
+    "",
+    "【其他】",
+    "更多功能　募資、成績單、產業、額度、儀表板",
+    "設定選單　重建底部圖文選單",
   ].join("\n");
+}
+
+// "did you mean": command words that share characters with the input, best first
+export function suggest(text, words = COMMAND_WORDS) {
+  const t = String(text || "").normalize("NFKC").trim().toLowerCase();
+  if (!t) return [];
+  const scored = words.map((w) => {
+    const chars = [...w].filter((c) => t.includes(c)).length;
+    const hit = w.includes(t) || t.includes(w) ? 10 : 0;
+    return { w, s: hit + chars / w.length };
+  }).filter((x) => x.s >= 0.5).sort((a, b) => b.s - a.s);
+  return scored.slice(0, 4).map((x) => x.w);
+}
+
+export function moreCard(dash) {
+  const btn = (label, text) => ({ type: "button", style: "secondary", height: "sm", flex: 1, action: { type: "message", label, text } });
+  const pair = (a, b) => ({ type: "box", layout: "horizontal", spacing: "sm", contents: [a, b] });
+  const body = [
+    txt("更多功能", { size: "md", weight: "bold", color: "#eef1f8" }),
+    pair(btn("募資", "募資"), btn("成績單", "成績單")),
+    pair(btn("提醒清單", "提醒清單"), btn("額度", "額度")),
+    pair(btn("產業分布", "產業"), btn("全部指令", "說明")),
+  ];
+  return flex("更多功能", bubble(body, dash ? [link(dash, "開啟儀表板")] : null));
 }
 
 // ── data access (Supabase REST, service role) ───────────────────────────────
@@ -304,6 +339,7 @@ export async function run(cmd, db, ctx) {
   const enc = encodeURIComponent;
   switch (cmd.cmd) {
     case "help": return withQuick([{ type: "text", text: helpText() }], MAIN_QUICK);
+    case "more": return withQuick([moreCard(dash)], MAIN_QUICK.slice(0, 5));
     case "stock": {
       const rows = await db.get(`latest_board?ticker=eq.${enc(cmd.ticker)}&limit=1`);
       if (!rows.length) {
@@ -358,27 +394,35 @@ export async function run(cmd, db, ctx) {
     case "watch": {
       const uid = await db.ownerId();
       const w = await db.get(`user_watch?user_id=eq.${uid}&select=ticker,note`);
-      if (!w.length) return [{ type: "text", text: "自選是空的。輸入「加 NRXS」開始。" }];
+      if (!w.length) return withQuick([{ type: "text", text: "自選是空的。輸入「加 NRXS」開始，可一次加多檔：加 NRXS ACOG。" }], [qr("榜單", "榜單"), qr("今日", "今日")]);
       const list = w.map((x) => enc(x.ticker)).join(",");
       const rows = await db.get(`latest_board?ticker=in.(${list})&order=score.desc`);
       const have = new Set(rows.map((r) => r.ticker));
       const missing = w.filter((x) => !have.has(x.ticker)).map((x) => x.ticker);
       const msgs = [topCard(rows, "自選 " + rows.length + " 檔")];
       if (missing.length) msgs.push({ type: "text", text: "今天沒有評分資料：" + missing.join("、") });
-      return msgs;
+      return withQuick(msgs, [qr("今日", "今日"), qr("週報", "週報"), qr("榜單", "榜單"), qr("更多功能", "更多功能")]);
     }
     case "add": case "del": case "note": {
       const uid = await db.ownerId();
+      const list = cmd.tickers && cmd.tickers.length ? cmd.tickers : [cmd.ticker];
       if (cmd.cmd === "del") {
-        await db.send("DELETE", `user_watch?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}`);
-        return [{ type: "text", text: `已從自選移除 ${cmd.ticker}。` }];
+        await db.send("DELETE", `user_watch?user_id=eq.${uid}&ticker=in.(${list.map(enc).join(",")})`);
+        return withQuick([{ type: "text", text: `已從自選移除 ${list.join("、")}。` }], [qr("自選", "自選")]);
+      }
+      if (cmd.cmd === "add" && list.length > 1) {
+        const ex = new Set((await db.get(`entities?ticker=in.(${list.map(enc).join(",")})&select=ticker`)).map((r) => r.ticker));
+        const ok = list.filter((x) => ex.has(x)), bad = list.filter((x) => !ex.has(x));
+        const now = new Date().toISOString();
+        if (ok.length) await db.send("POST", "user_watch?on_conflict=user_id,ticker", ok.map((x) => ({ user_id: uid, ticker: x, updated_at: now })), "resolution=merge-duplicates,return=minimal");
+        return withQuick([{ type: "text", text: (ok.length ? `已加入自選：${ok.join("、")}。` : "沒有加入任何股票。") + (bad.length ? `\n找不到：${bad.join("、")}。` : "") }], [qr("自選", "自選")]);
       }
       const ex = await db.get(`entities?ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`);
       if (!ex.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有加入。` }];
       const row = { user_id: uid, ticker: cmd.ticker, updated_at: new Date().toISOString() };
       if (cmd.cmd === "note") row.note = cmd.text;
       await db.send("POST", "user_watch?on_conflict=user_id,ticker", [row], "resolution=merge-duplicates,return=minimal");
-      return [{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }];
+      return withQuick([{ type: "text", text: cmd.cmd === "note" ? `已更新 ${cmd.ticker} 的筆記。` : `已加入自選：${cmd.ticker}。` }], [qr("自選", "自選"), qr("設提醒", "提醒 " + cmd.ticker)]);
     }
     case "smart": {
       if (cmd.ticker) {
@@ -470,7 +514,11 @@ export async function run(cmd, db, ctx) {
     case "menu": return [{ type: "text", text: await ctx.setupMenu() }];
     default: {
       const found = cmd.cmd === "unknown" ? await findByName(db, cmd.text) : null;
-      return found || [{ type: "text", text: "看不懂「" + String(cmd.text || "").slice(0, 30) + "」。輸入「說明」看指令。" }];
+      if (found) return found;
+      const sug = suggest(cmd.text);
+      return sug.length
+        ? withQuick([{ type: "text", text: "看不懂「" + String(cmd.text || "").slice(0, 30) + "」。你是不是要：" }], sug.map((w) => qr(w, w)))
+        : withQuick([{ type: "text", text: "看不懂「" + String(cmd.text || "").slice(0, 30) + "」。輸入股票代號，或點下方按鈕。" }], [...MAIN_QUICK.slice(0, 5), qr("說明", "說明")]);
     }
   }
 }
@@ -535,7 +583,7 @@ async function setupMenu(fetchFn) {
   const img = await fetchFn(dash.replace(/\/?$/, "/") + "richmenu.png");
   if (!img.ok) return "找不到選單圖片 richmenu.png（" + img.status + "）。";
   const bytes = new Uint8Array(await img.arrayBuffer());
-  const labels = ["榜單", "自選", "大戶", "募資", "成績單", "說明"];
+  const labels = MENU;
   const w = 2500, h = 843, cw = Math.floor(w / 3), ch = Math.floor(h / 2);
   const areas = labels.map((t, i) => ({ bounds: { x: (i % 3) * cw, y: Math.floor(i / 3) * ch, width: cw, height: ch }, action: { type: "message", text: t } }));
   const c = await fetchFn("https://api.line.me/v2/bot/richmenu", {
@@ -548,7 +596,17 @@ async function setupMenu(fetchFn) {
   if (!up.ok) return "上傳圖片失敗：" + up.status + " " + (await up.text()).slice(0, 200);
   const def = await fetchFn(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, { method: "POST", headers: auth });
   if (!def.ok) return "設為預設失敗：" + def.status;
-  return "選單已建立。";
+  // remove the menus this bot made before, so repeated setups don't pile up
+  let removed = 0;
+  try {
+    const ls = await fetchFn("https://api.line.me/v2/bot/richmenu/list", { headers: auth });
+    const old = ls.ok ? ((await ls.json()).richmenus || []).filter((m) => m.name === "trend-menu" && m.richMenuId !== richMenuId) : [];
+    for (const m of old) {
+      const d = await fetchFn(`https://api.line.me/v2/bot/richmenu/${m.richMenuId}`, { method: "DELETE", headers: auth });
+      if (d.ok) removed++;
+    }
+  } catch (_) { /* cleanup is best-effort */ }
+  return "選單已建立。" + (removed ? `已清掉 ${removed} 個舊選單。` : "");
 }
 
 export async function handle(req, fetchFn = fetch) {
