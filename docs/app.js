@@ -345,16 +345,16 @@
     $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === m)));
     $('#tabs-us').hidden = m === 'tw';
     $('#tabs-tw').hidden = m !== 'tw';
-    if (m === 'tw') { if (state.tab !== 'tw' && state.tab !== 'twreport') state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
+    if (m === 'tw') { if (!['tw', 'twwatch', 'twreport'].includes(state.tab)) state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
   }
 
   function setTab(tab) {
     state.tab = tab;
     $$('#tabs-us button, #tabs-tw button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-    if (tab === 'tw' || tab === 'twreport') state.twTab = tab;
+    if (tab === 'tw' || tab === 'twwatch' || tab === 'twreport') state.twTab = tab;
     const rep = tab === 'report' || tab === 'heat' || tab === 'twreport';
     const raise = tab === 'raise';
-    const tw = tab === 'tw';
+    const tw = tab === 'tw' || tab === 'twwatch';
     $('#report').hidden = !(tab === 'report' || tab === 'twreport');
     $('#heat').hidden = tab !== 'heat';
     $('.board').hidden = rep;
@@ -370,6 +370,10 @@
     if (tw) {
       ['#tbl-stock', '#tbl-raise', '#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise'].forEach((q) => { $(q).hidden = true; });
       $('#count').hidden = false;
+      if (state.usQ == null) state.usQ = $('#quality').textContent;
+      $('#quality').hidden = false;
+      const n = (state.tw || []).length;
+      $('#quality').textContent = `共評分 ${nf(n)} 檔（上市＋上櫃）。台股沒有毛利率與 Hacker News 資料，驗證與擁擠度是簡化版；資料來自證交所與櫃買中心。`;
       buildTwTable();
       return;
     }
@@ -379,6 +383,7 @@
     $('#filters-raise').hidden = !raise;
     $('#views').hidden = raise;
     $('#quality').hidden = raise;
+    if (state.usQ != null) $('#quality').textContent = state.usQ;
     $('#legend-stock').hidden = raise;
     $('#legend-raise').hidden = !raise;
     $('#count').hidden = false;
@@ -570,8 +575,14 @@
   // ── Taiwan table ────────────────────────────────────────────────────────
   const twd = (v) => (isNum(v) ? (v < 0 ? '−NT$' : 'NT$') + compact(Math.abs(v)) : '—');
   function buildTwTable() {
-    const rows = (state.tw || []).filter((r) => r.board === 'tw_main');
-    if (state.twTable) { state.twTable.redraw(true); applyTwFilters(); return; }
+    const board = state.tab === 'twwatch' ? 'tw_watch' : 'tw_main';
+    const rows = (state.tw || []).filter((r) => r.board === board);
+    if (state.twTable) {
+      if (state.twBoard !== board) state.twTable.setData(rows);
+      state.twBoard = board;
+      state.twTable.redraw(true); applyTwFilters(); return;
+    }
+    state.twBoard = board;
     state.twTable = new Tabulator('#tbl-tw', {
       data: rows,
       index: 'ticker',
@@ -579,6 +590,12 @@
       height: tableHeight(),
       responsiveLayout: 'hide',
       placeholder: '台股還沒有資料',
+      rowFormatter(row) {
+        const el = row.getElement();
+        el.tabIndex = 0;
+        el.setAttribute('role', 'button');
+        el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTwStock(row.getData()); } };
+      },
       initialSort: [{ column: 'score', dir: 'desc' }],
       columns: [
         { title: '#', field: 'rank', width: 72, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 0 },
@@ -604,9 +621,52 @@
         { title: '日成交值', field: 'dollar_vol', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
           headerTooltip: '20 日平均成交值', formatter: (c) => twd(c.getValue()) },
         { title: '產業', field: 'sector', width: 140, responsive: 5, formatter: (c) => esc(c.getValue() || '—') },
+        { title: '風險標記', field: 'flags', minWidth: 170, widthGrow: 2, headerSort: false, responsive: 6, formatter: (c) => chips(c.getValue()) },
       ],
     });
+    state.twTable.on('rowClick', (_e, row) => openTwStock(row.getData()));
     state.twTable.on('tableBuilt', () => { state.twReady = true; applyTwFilters(); });
+  }
+
+  function openTwStock(d) {
+    state.current = d.ticker;
+    const diff = isNum(d.score_7d) ? d.score - d.score_7d : null;
+    const f = (d.flags || []).filter((x) => FLAGS[x]);
+    const yahoo = `https://tw.stock.yahoo.com/quote/${encodeURIComponent(d.ticker)}`;
+    const mops = `https://mops.twse.com.tw/mops/web/t05st10_ifrs`;
+    const boardName = d.board === 'tw_main' ? '主榜' : '觀察清單';
+    $('#drawer-body').innerHTML = `
+      <div class="d-head">
+        <h2 id="drawer-title">${esc(d.ticker)}</h2>
+        <p class="muted">${esc(d.name || '')}${d.exchange ? '，' + esc(d.exchange) : ''}</p>
+        <div class="d-links"><a href="${esc(yahoo)}" target="_blank" rel="noopener noreferrer">Yahoo 股市</a><a href="${esc(mops)}" target="_blank" rel="noopener noreferrer">公開資訊觀測站</a></div>
+      </div>
+      <div class="d-score">
+        <span class="big">${nf(d.score, 1)}</span>
+        <span class="meta">${boardName}第 ${nf(d.rank)} 名${diff !== null ? `，比約 7 天前${diff >= 0 ? '高' : '低'} ${Math.abs(diff).toFixed(1)}` : ''}</span>
+      </div>
+      <div class="d-section radar-wrap"><canvas id="radar" height="220" aria-label="四個面向雷達圖"></canvas><p class="chart-note">藍色是這檔，灰色是台股主榜的中位數。冷門度是擁擠的反面。</p></div>
+      ${pillar(0, '成長', d.growth, `最新單月營收年增 ${spct(d.rev_yoy)}，6 個月相對強度 ${spct(d.rs_6m)}（相對加權指數）。`, beats(d.growth))}
+      ${pillar(1, '驗證', d.validated, `單月營收年增 ${spct(d.rev_yoy)}，累計營收年增 ${spct(d.rev_cum_yoy)}。台股沒有毛利率資料，這一項是簡化版。`)}
+      ${pillar(2, '進場', d.accessibility, `市值 ${twd(d.mkt_cap)}，20 日平均成交值 ${twd(d.dollar_vol)}，股價 NT$${nf(d.price, 2)}。`)}
+      ${pillar(3, '擁擠', d.attention, `只看 20 日平均成交值 ${twd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。` : '')}
+      <div class="d-section"><h3>風險標記</h3>${f.length
+        ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
+        : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
+      <div class="d-section"><h3>資料來源</h3>
+        <p class="chart-note">股價與成交值：證交所與櫃買中心每日收盤行情。營收：公開資訊觀測站的月營收（通常次月 10 日前公布）。市值是收盤價乘以發行股數。</p>
+      </div>
+      <div class="d-section"><h3>其他數字</h3>
+        <dl class="facts">
+          <div><dt>近 1 個月</dt><dd class="${tone(d.ret_1m)}">${spct(d.ret_1m, 1)}</dd></div>
+          <div><dt>近 3 個月</dt><dd class="${tone(d.ret_3m)}">${spct(d.ret_3m, 1)}</dd></div>
+          <div><dt>近 6 個月</dt><dd class="${tone(d.ret_6m)}">${spct(d.ret_6m, 1)}</dd></div>
+          <div><dt>距 52 週高點</dt><dd>${spct(d.dist_high, 1)}</dd></div>
+          <div><dt>產業</dt><dd>${esc(d.sector || '—')}</dd></div>
+        </dl>
+      </div>`;
+    showDrawer();
+    drawRadar(d);
   }
 
   function applyTwFilters() {
@@ -618,7 +678,7 @@
       (d.score ?? 0) >= state.tmin &&
       (!state.tgrow || (d.rev_yoy ?? -1) >= 0.3) &&
       (!state.ttpex || d.exchange === 'TPEx'));
-    const total = (state.tw || []).filter((r) => r.board === 'tw_main').length;
+    const total = (state.tw || []).filter((r) => r.board === state.twBoard).length;
     $('#count').textContent = `顯示 ${state.twTable.getDataCount('active')} 檔，共 ${total} 檔`;
   }
 
@@ -813,7 +873,8 @@
     const cv = $('#radar');
     if (!cv || typeof Chart === 'undefined') return;
     const med = (k) => {
-      const v = state.rows.filter((r) => r.board === 'main' && isNum(r[k])).map((r) => r[k]).sort((a, b) => a - b);
+      const tw = String(d.board || '').startsWith('tw');
+      const v = (tw ? state.tw : state.rows).filter((r) => r.board === (tw ? 'tw_main' : 'main') && isNum(r[k])).map((r) => r[k]).sort((a, b) => a - b);
       return v.length ? v[Math.floor(v.length / 2)] : 0;
     };
     const cool = (x) => (isNum(x) ? 100 - x : 0);

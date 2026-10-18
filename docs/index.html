@@ -15,7 +15,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
   <script defer src="config.js"></script>
-  <script defer src="app.js?v=20261023"></script>
+  <script defer src="app.js?v=20261024"></script>
 </head>
 <body>
   <header class="top glass">
@@ -57,6 +57,7 @@
 
         <div class="seg glass" id="tabs-tw" role="tablist" aria-label="台股清單" hidden>
           <button role="tab" data-tab="tw" aria-selected="true">主榜</button>
+          <button role="tab" data-tab="twwatch" aria-selected="false">觀察清單</button>
           <button role="tab" data-tab="twreport" aria-selected="false">成績單</button>
         </div>
 
@@ -115,8 +116,14 @@
       </section>
 
       <section id="legend-tw" class="legend" hidden>
-        <h3>台股榜怎麼看</h3>
-        <p class="muted">沿用同一套評分，門檻按約 32 倍匯率換算成新台幣；資料來自證交所與櫃買中心的公開資料。成長用最新單月營收年增；驗證用營收年增與累計年增是否為正的簡化版（沒有毛利率）；擁擠度只看成交值。6 個月強度是相對加權指數。金額單位為新台幣。</p>
+        <p class="muted">每檔右側的四根細條是它的分數結構，由左到右：</p>
+        <ul>
+          <li><i class="sw g0"></i><b>成長</b> 單月營收年增與相對加權指數的強度</li>
+          <li><i class="sw g1"></i><b>驗證</b> 成長是不是真的：單月與累計營收年增是否都為正（台股沒有毛利率，這是簡化版）</li>
+          <li><i class="sw g2"></i><b>進場</b> 小額資金買得到、賣得掉嗎</li>
+          <li><i class="sw g3"></i><b>擁擠</b> 成交值越高，代表越多人已經注意到，會扣分（台股沒有 Hacker News）</li>
+        </ul>
+        <p class="muted">門檻是美股門檻乘以約 32 倍匯率，金額為新台幣；資料來自證交所與櫃買中心的公開資料。主榜只收通過門檻且分數最高的前 150 檔，其餘放在觀察清單。</p>
       </section>
       <section id="legend-stock" class="legend">
         <p class="muted">每檔右側的四根細條是它的分數結構，由左到右：</p>
