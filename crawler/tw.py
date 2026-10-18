@@ -30,10 +30,10 @@ from . import score
 TWD_PER_USD = 32.0
 TWSE_DAY = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={d}&type=ALLBUT0999&response=json"
 TPEX_DAY = "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?date={d}&type=EW&response=json"
-TWSE_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
-TPEX_REV = "https://openapi.tpex.org.tw/v1/mopsfin_t187ap05_O"
-TWSE_CO = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
-TPEX_CO = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+TWSE_REV = ["https://openapi.twse.com.tw/v1/opendata/t187ap05_L"]
+TPEX_REV = ["https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O", "https://openapi.tpex.org.tw/v1/mopsfin_t187ap05_O"]
+TWSE_CO = ["https://openapi.twse.com.tw/v1/opendata/t187ap03_L"]
+TPEX_CO = ["https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"]
 INDEX_NAME = "發行量加權股價指數"
 BENCH = "_TAIEX"
 HISTORY_DAYS = 215
@@ -81,19 +81,22 @@ def _num(v):
 
 # ── fetching ────────────────────────────────────────────────────────────────
 
-def _get(url: str, session=None, tries: int = 4):
+def _get(url, session=None, tries: int = 4):
+    """url may be a list of mirrors: each is tried in turn, `tries` rounds in total."""
     s = session or requests
+    urls = [url] if isinstance(url, str) else list(url)
     last = None
     for i in range(tries):
-        try:
-            r = s.get(url, headers=UA, timeout=60)
-            if r.status_code == 200:
-                return r.content.decode("utf-8", "replace")
-            last = RuntimeError(f"HTTP {r.status_code}")
-        except requests.RequestException as e:  # includes dropped connections on big payloads
-            last = e
-        time.sleep(2 * (i + 1))
-    raise RuntimeError(f"{url[:70]}…: {last!r}")
+        for u in urls:
+            try:
+                r = s.get(u, headers=UA, timeout=60)
+                if r.status_code == 200:
+                    return r.content.decode("utf-8", "replace")
+                last = RuntimeError(f"HTTP {r.status_code}")
+            except requests.RequestException as e:  # includes dropped connections and DNS hiccups
+                last = e
+        time.sleep(3 * (i + 1))
+    raise RuntimeError(f"{urls[0][:70]}…: {last!r}")
 
 
 def load_json_list(text: str) -> list[dict]:
