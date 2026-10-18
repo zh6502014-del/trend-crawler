@@ -46,6 +46,7 @@
         <div class="seg glass" role="tablist" aria-label="清單">
           <button role="tab" data-tab="main" aria-selected="true">主榜</button>
           <button role="tab" data-tab="watch" aria-selected="false">觀察清單</button>
+          <button role="tab" data-tab="tw" aria-selected="false">台股</button>
           <button role="tab" data-tab="raise" aria-selected="false">未上市募資</button>
           <button role="tab" data-tab="heat" aria-selected="false">熱度圖</button>
           <button role="tab" data-tab="report" aria-selected="false">成績單</button>
@@ -82,6 +83,7 @@
       <section class="board glass strong">
         <div id="tbl-stock"></div>
         <div id="tbl-raise" hidden></div>
+        <div id="tbl-tw" hidden></div>
       </section>
 
       <section id="heat" class="board glass strong report" hidden>
@@ -92,6 +94,10 @@
         <div id="report-body"><p class="muted">載入中…</p></div>
       </section>
 
+      <section id="legend-tw" class="legend" hidden>
+        <h3>台股榜怎麼看</h3>
+        <p class="muted">沿用同一套評分，門檻按約 32 倍匯率換算成新台幣；資料來自證交所與櫃買中心的公開資料。成長用最新單月營收年增；驗證用營收年增與累計年增是否為正的簡化版（沒有毛利率）；擁擠度只看成交值。6 個月強度是相對加權指數。金額單位為新台幣。</p>
+      </section>
       <section id="legend-stock" class="legend">
         <p class="muted">每檔右側的四根細條是它的分數結構，由左到右：</p>
         <ul>

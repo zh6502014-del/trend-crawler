@@ -156,6 +156,9 @@
         state.watch = new Map(w.map((x) => [x.ticker, x.note || '']));
       } catch (e) { state.watch = new Map(); }
       state.raises = raises;
+      try {
+        state.tw = await pageAll((a, b) => sb.from('tw_latest_board').select('*').order('rank').range(a, b));
+      } catch (e) { state.tw = []; }
       state.run = runRes.data?.[0] || null;
     } catch (e) {
       state.started = false;
@@ -333,13 +336,22 @@
     $$('.seg button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
     const rep = tab === 'report' || tab === 'heat';
     const raise = tab === 'raise';
+    const tw = tab === 'tw';
     $('#report').hidden = tab !== 'report';
     $('#heat').hidden = tab !== 'heat';
     $('.board').hidden = rep;
     $('#count').hidden = rep;
     if (rep) {
-      ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise'].forEach((q) => { $(q).hidden = true; });
+      ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise', '#legend-tw', '#tbl-tw'].forEach((q) => { $(q).hidden = true; });
       if (tab === 'report') loadReport(); else renderHeat();
+      return;
+    }
+    $('#tbl-tw').hidden = !tw;
+    $('#legend-tw').hidden = !tw;
+    if (tw) {
+      ['#tbl-stock', '#tbl-raise', '#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise'].forEach((q) => { $(q).hidden = true; });
+      $('#count').hidden = false;
+      buildTwTable();
       return;
     }
     $('#tbl-stock').hidden = raise;
@@ -533,6 +545,48 @@
     t.on('tableBuilt', () => { state.stockReady = true; applyFilters(); openFromLink(); });
     t.on('rowClick', (_e, row) => openStock(row.getData()));
     state.stockTable = t;
+  }
+
+  // ── Taiwan table ────────────────────────────────────────────────────────
+  const twd = (v) => (isNum(v) ? (v < 0 ? '−NT$' : 'NT$') + compact(Math.abs(v)) : '—');
+  function buildTwTable() {
+    const rows = (state.tw || []).filter((r) => r.board === 'tw_main');
+    $('#count').textContent = rows.length ? `台股主榜 ${rows.length} 檔` : '台股還沒有資料';
+    if (state.twTable) { state.twTable.redraw(true); return; }
+    state.twTable = new Tabulator('#tbl-tw', {
+      data: rows,
+      index: 'ticker',
+      layout: 'fitColumns',
+      height: tableHeight(),
+      responsiveLayout: 'hide',
+      placeholder: '台股還沒有資料',
+      initialSort: [{ column: 'score', dir: 'desc' }],
+      columns: [
+        { title: '#', field: 'rank', width: 72, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 0 },
+        { title: '股票', field: 'ticker', minWidth: 170, widthGrow: 3, responsive: 0,
+          formatter: (c) => { const d = c.getData(); return `<div class="cell-name"><a href="https://tw.stock.yahoo.com/quote/${encodeURIComponent(d.ticker)}" target="_blank" rel="noopener noreferrer"><b>${esc(d.ticker)}</b></a><span>${esc(d.name || '')}${d.exchange ? '，' + esc(d.exchange) : ''}</span></div>`; } },
+        { title: '分數', field: 'score', width: 124, sorter: 'number', responsive: 0,
+          formatter: (c) => {
+            const d = c.getData();
+            const diff = isNum(d.score_7d) ? d.score - d.score_7d : null;
+            const delta = diff !== null && Math.abs(diff) >= 0.5
+              ? `<span class="delta ${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '+' : '−'}${Math.abs(diff).toFixed(1)}</span>` : '';
+            return `<div class="cell-score"><b>${nf(d.score, 1)}</b>${delta}</div>`;
+          } },
+        { title: '結構', field: 'growth', width: 80, headerSort: false, responsive: 1, formatter: (c) => glyph(c.getData()) },
+        { title: '營收年增', field: 'rev_yoy', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 2,
+          formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue())}</span>` },
+        { title: '累計年增', field: 'rev_cum_yoy', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 3,
+          formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue())}</span>` },
+        { title: '6 個月強度', field: 'rs_6m', width: 136, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 3,
+          headerTooltip: '6 個月報酬減去加權指數的 6 個月報酬',
+          formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue())}</span>` },
+        { title: '市值', field: 'mkt_cap', width: 120, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4, formatter: (c) => twd(c.getValue()) },
+        { title: '日成交值', field: 'dollar_vol', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
+          headerTooltip: '20 日平均成交值', formatter: (c) => twd(c.getValue()) },
+        { title: '產業', field: 'sector', width: 140, responsive: 5, formatter: (c) => esc(c.getValue() || '—') },
+      ],
+    });
   }
 
   // ── Reg CF table ────────────────────────────────────────────────────────
