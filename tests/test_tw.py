@@ -1,6 +1,7 @@
 import datetime as dt
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def _twse_payload(rows, index=46969.87):
@@ -98,7 +99,8 @@ def test_price_frame_and_scoring_end_to_end():
     assert cfg.MIN_PRICE == 1.0 and cfg.MIN_DOLLAR_VOL == 300_000
 
 
-def test_run_tw_writes_tables(monkeypatch):
+@pytest.mark.parametrize("mixed_history", [False, True])
+def test_run_tw_writes_tables(monkeypatch, mixed_history):
     from crawler import tw
     from crawler.store import MemoryStore
     hist = _history()
@@ -111,11 +113,29 @@ def test_run_tw_writes_tables(monkeypatch):
     from crawler import tw_inst
     monkeypatch.setattr(tw_inst, "enrich", lambda store, scored, hist, session=None: scored)  # no network in tests
     from crawler import tw_revenue
-    monkeypatch.setattr(tw_revenue, "load_history", lambda *args: ({}, {"failed": [], "status": "ok"}))
+    revenue_history = {}
+    if mixed_history:
+        # Missing/zero-base histories make pandas promote the valid integer
+        # streaks to floats; PostgREST rejects e.g. 4.0 for an integer column.
+        for i in range(6):
+            bars = {code: [120 if i < 4 else 80, 100] for code in codes[:-1]}
+            bars[codes[1]] = [120, 0]
+            month = tw_revenue.shift(dt.date(2026, 9, 1), -i).isoformat()
+            revenue_history[("TPEx", month)] = {"bars": bars, "fetched_at": "2026-10-18"}
+    monkeypatch.setattr(tw_revenue, "load_history", lambda *args: (revenue_history, {"failed": [], "status": "ok"}))
     st = MemoryStore()
-    stats = tw.run_tw(st)
+    stats = tw.run_tw(st, today=dt.date(2026, 10, 18))
     assert stats["scorable"] == 60
     assert len(st.select("tw_scores")) == 60 and len(st.select("tw_signals")) == 60 and len(st.select("tw_entities")) == 60
+    signals = {r["ticker"]: r for r in st.select("tw_signals")}
+    for row in signals.values():
+        for field in ("rev_streak", "revenue_months", "revenue_streak_months"):
+            assert row[field] is None or type(row[field]) is int
+    if mixed_history:
+        assert signals[codes[0]]["revenue_streak_months"] == 4
+        assert signals[codes[0]]["revenue_months"] == 6
+        assert signals[codes[1]]["revenue_streak_months"] is None
+        assert signals[codes[-1]]["revenue_months"] == 0
 
 
 def test_report_uses_taiex_benchmark():

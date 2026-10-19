@@ -368,9 +368,12 @@ def run_tw(store, today: dt.date | None = None) -> dict:
         for t, r in scored.iterrows()], "ticker")
     cols = ["price", "mkt_cap", "dollar_vol", "ret_1m", "ret_3m", "ret_6m", "rs_6m", "dist_high", "rev_yoy", "rev_streak", "shares_out"]
     cols += list(tw_revenue.METRICS)
+    # Nullable pandas counts can become floats. PostgREST requires JSON
+    # integers for integer columns, while unknown counts must remain null.
+    count_cols = {"rev_streak", "revenue_months", "revenue_streak_months"}
     store.upsert("tw_signals", [{"ticker": t, "as_of": as_of, "ym": r.get("ym"), "rev_cum_yoy": r.get("rev_cum_yoy"),
                                  "scoring_version": "tw-revenue-v3",
-                                 **{c: (int(r[c]) if c == "rev_streak" and pd.notna(r[c]) else r.get(c)) for c in cols},
+                                 **{c: (int(r[c]) if pd.notna(r.get(c)) else None) if c in count_cols else r.get(c) for c in cols},
                                  **{c: r.get(c) for c in INST_COLS if c in scored.columns}}
                                 for t, r in scored.iterrows()], "ticker,as_of")
     store.upsert("tw_scores", [
