@@ -4,6 +4,9 @@
 // the request is authenticated by the LINE signature instead.
 import { resolveInput, nextSession, cleanName } from './assistant.ts';
 import { explain } from './ai.ts';
+import menuConfig from './menu.json' with { type: 'json' };
+import { syncRichMenus } from './richmenu.ts';
+export { MENU, MENU_TW, MENU_W, MENU_H, MENU_TAB_H, menuAreas } from './richmenu.ts';
 const env = (k) => (typeof Deno !== "undefined" ? Deno.env.get(k) : process.env[k]) || "";
 
 const TAGS = { insider_cluster: "內部人群買", insider_buy: "內部人買進", activist_13d: "13D 積極持有", new_5pct: "新增 5% 持有人" };
@@ -62,8 +65,6 @@ export const withQuick = (msgs, items) => {
 const MAIN_QUICK = [qr("今日", "今日"), qr("榜單", "榜單"), qr("自選", "自選"), qr("週報", "週報"), qr("大戶", "大戶"), qr("台股", "台股"), qr("更多功能", "更多功能")];
 const TW_QUICK = [qr("台股今日", "台股今日"), qr("台股榜單", "台股"), qr("自選", "自選"), qr("台股週報", "台股週報"), qr("台股法人", "台股法人"), qr("台股成績單", "台股成績單"), qr("美股榜單", "榜單")];
 // rich menu cells, left→right, top→bottom. The image (docs/richmenu.png) is drawn by scripts/make_richmenu.py in the same order.
-export const MENU = ["今日", "榜單", "自選", "週報", "大戶", "更多功能"];
-export const MENU_TW = ["台股今日", "台股", "自選", "台股週報", "台股法人", "更多功能"];
 const TICK = "(?:[A-Za-z][A-Za-z.\\-]{0,5}|\\d{4,6}[A-Za-z]?)";
 // words that start a command, for "did you mean" suggestions
 const COMMAND_WORDS = ["今日", "榜單", "自選", "週報", "大戶", "台股", "台股今日", "台股週報", "募資", "成績單", "提醒清單", "額度", "產業", "比較", "說明", "更多功能"];
@@ -81,6 +82,8 @@ export function parseCommand(raw) {
   if (!t) return { cmd: "help" };
   const low = t.toLowerCase();
   if (/^(說明|help|\?|指令|選單)$/.test(low)) return { cmd: "help" };
+  if (/^(個股解讀|解讀)$/.test(t)) return { cmd: 'explainhelp' };
+  if (/^(筆記|我的筆記|筆記列表)$/.test(t)) return { cmd: 'notes', q: '' };
   if (/^(設定選單|setup menu)$/.test(low)) return { cmd: "menu" };
   if (/^(更多功能|功能|工具|more)$/.test(low)) return { cmd: "more" };
   // Taiwan: 台股 / 台股 2 / 台股今日 / 台股週報 / 台股成績單 / 台股產業 半導體 / 台股 2330
@@ -163,6 +166,8 @@ const bubble = (body, footer) => ({
 });
 const flex = (altText, contents) => ({ type: "flex", altText: String(altText).slice(0, 380), contents });
 const link = (url, label) => ({ type: "button", style: "primary", height: "sm", color: "#4f6cf0", action: { type: "uri", label, uri: url } });
+const dashboardButton = (ticker = '', label = '開啟網頁') => ({ type: 'button', style: 'primary', height: 'sm', color: '#4f6cf0',
+  action: { type: 'message', label, text: '儀表板' + (ticker ? ' ' + ticker : '') } });
 const tapRow = (left, mid, right, tapText) => ({
   type: "box", layout: "horizontal", paddingAll: "6px", spacing: "sm", action: { type: "message", label: String(tapText).slice(0, 20), text: tapText },
   contents: [txt(left, { flex: 1, color: "#8a93a6", size: "xs" }), txt(mid, { flex: 4, weight: "bold", color: "#eef1f8" }), txt(right, { flex: 2, align: "end", color: "#eef1f8" })],
@@ -196,7 +201,7 @@ export function stockCard(s, smart, dash, extra = {}) {
     dataLine(s.as_of),
   ];
   const url = extra.url || deepLink(dash, s.ticker);
-  return flex(`${s.ticker} 分數 ${num(s.score)}`, bubble(body, url ? [link(url, "在儀表板開啟")] : null));
+  return flex(`${s.ticker} 分數 ${num(s.score)}`, bubble(body, extra.freshLogin ? [dashboardButton(s.ticker)] : url ? [link(url, "在儀表板開啟")] : null));
 }
 
 export const daysLeft = (d, now = Date.now()) => {
@@ -267,7 +272,7 @@ export function twStockCard(s, extra = {}) {
     ...(flags.length ? [row("風險", flags.join("、"), { color: "#ee6a7b" })] : []),
     dataLine(s.as_of, true),
   ];
-  return flex(`${s.ticker} ${s.name || ""} 分數 ${num(s.score)}`, bubble(body, extra.url ? [link(extra.url, "在儀表板開啟")] : null));
+  return flex(`${s.ticker} ${s.name || ""} 分數 ${num(s.score)}`, bubble(body, extra.freshLogin ? [dashboardButton(s.ticker)] : extra.url ? [link(extra.url, "在儀表板開啟")] : null));
 }
 
 export function topCard(rows, title) {
@@ -324,18 +329,20 @@ export function suggest(text, words = COMMAND_WORDS) {
   return scored.slice(0, 4).map((x) => x.w);
 }
 
-export function moreCard(dash, oneTime = false) {
+export function moreCard(dash, oneTime = false, tw = false) {
   const btn = (label, text) => ({ type: "button", style: "secondary", height: "sm", flex: 1, action: { type: "message", label, text } });
   const pair = (a, b) => ({ type: "box", layout: "horizontal", spacing: "sm", contents: [a, b] });
   const body = [
-    txt("更多功能", { size: "md", weight: "bold", color: "#eef1f8" }),
+    txt(`${tw ? '台股' : '美股'}工具箱`, { size: "md", weight: "bold", color: "#eef1f8" }),
+    pair(btn("每週變化", tw ? "台股週報" : "美股 週報"), btn(tw ? "法人動向" : "大戶動向", tw ? "台股法人" : "美股 大戶")),
+    pair(btn("個股解讀", "個股解讀"), btn("我的筆記", "我的筆記")),
     pair(btn("募資", "募資"), btn("成績單", "成績單")),
     pair(btn("提醒清單", "提醒清單"), btn("額度", "額度")),
     pair(btn("台股成績單", "台股成績單"), btn("台股產業", "台股產業")),
     pair(btn("產業分布", "產業"), btn("全部指令", "說明")),
     ...(oneTime ? [txt("儀表板按鈕免登入，1 小時內有效、只能用一次。", { size: "xxs", color: "#8a93a6", margin: "md" })] : []),
   ];
-  return flex("更多功能", bubble(body, dash ? [link(dash, "開啟儀表板")] : null));
+  return flex("更多功能", bubble(body, dash ? [dashboardButton()] : null));
 }
 
 // ── data access (Supabase REST, service role) ───────────────────────────────
@@ -378,9 +385,9 @@ function makeDb(fetchFn) {
     const r = await fetchFn(base + "/auth/v1/admin/generate_link", {
       method: "POST", headers: h, body: JSON.stringify({ type: "magiclink", email, redirect_to: redirectTo }), ...sig(),
     });
-    if (!r.ok) { console.error("generate_link", r.status, (await r.text()).slice(0, 200)); return null; }
+    if (!r.ok) { console.error("generate_link", r.status); return null; }
     const j = await r.json();
-    return j.action_link || (j.properties && j.properties.action_link) || null;
+    return dashboardLoginUrl(redirectTo, j);
   };
   const rpc = async (name, body) => {
     const r = await fetchFn(base + '/rest/v1/rpc/' + name, { method: 'POST', headers: h, body: JSON.stringify(body), ...sig() });
@@ -447,6 +454,17 @@ export async function findByName(db, q) {
 
 // ── command handlers → array of LINE message objects ────────────────────────
 // dashboard URL that signs the owner in without email; falls back to the plain URL
+export function dashboardLoginUrl(target, result) {
+  // A fragment isn't sent to GitHub Pages or followed by HTTP-only link previews.
+  // The dashboard exchanges it directly with Supabase, avoiding redirect/hash loss.
+  const token = result.hashed_token || result.properties?.hashed_token;
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{20,256}$/.test(token)) return null;
+  const url = new URL(target);
+  if (url.protocol !== 'https:') return null;
+  url.hash = new URLSearchParams({ line_token: token, type: 'email' }).toString();
+  return url.href;
+}
+
 export async function dashLink(db, dash, ticker) {
   if (!dash) return { url: "", oneTime: false };
   const plain = ticker ? deepLink(dash, ticker) : dash;
@@ -499,7 +517,7 @@ async function twStock(cmd, db, dash) {
     const uid = await db.ownerId();
     watching = (await db.get(`user_watch?user_id=eq.${uid}&ticker=eq.${enc(t)}&select=ticker&limit=1`)).length > 0;
   } catch (_) { /* buttons still work */ }
-  extra.url = (await dashLink(db, dash, t)).url;
+  extra.freshLogin = !!dash;
   return withQuick([twStockCard(r, extra)], [
     watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("法人動向", "大戶 " + t), qr("台股榜單", "台股"),
     qr('解讀', '解讀 ' + t), qr('筆記', '讀筆記 ' + t),
@@ -514,6 +532,7 @@ export async function run(cmd, db, ctx) {
     case 'message': return withQuick([{ type: 'text', text: cmd.text }], (cmd.choices || []).map((x) => qr(x.label, x.text)));
     case 'reset': return withQuick([{ type: 'text', text: '已重設目前市場、股票與頁碼。' }], MAIN_QUICK);
     case 'explain': case 'explanation': return explain(cmd, db, ctx);
+    case 'explainhelp': return withQuick([{ type: 'text', text: '想解讀哪一檔？\n輸入「解讀 2330」或「解讀 輝達」，也可以先查股票，再點「個股解讀」。\n目前提供評分重點、風險及資料缺口。' }], [qr('台積電', '解讀 2330'), qr('輝達', '解讀 輝達'), qr('我的自選', '自選')]);
     case 'notes': {
       const uid = await db.ownerId(), q = cleanName(cmd.q);
       const rows = await db.get(`user_watch?user_id=eq.${uid}&note=neq.&select=ticker,note,updated_at&order=updated_at.desc&limit=10${q ? '&note=ilike.*' + enc(q) + '*' : ''}`);
@@ -532,14 +551,14 @@ export async function run(cmd, db, ctx) {
     }
     case "help": return withQuick([{ type: "text", text: helpText() }], MAIN_QUICK);
     case "more": {
-      const d = await dashLink(db, dash);
-      return withQuick([moreCard(d.url, d.oneTime)], MAIN_QUICK.slice(0, 5));
+      return withQuick([moreCard(dash, false, cmd.tw)], cmd.tw ? TW_QUICK.slice(0, 5) : MAIN_QUICK.slice(0, 5));
     }
     case "dash": {
       const d = await dashLink(db, dash, cmd.ticker);
       if (!d.url) return [{ type: "text", text: "還沒設定 DASHBOARD_URL。" }];
+      if (!d.oneTime) return withQuick([{ type: 'text', text: '暫時無法建立網頁登入連結。請稍後點「重新開啟網頁」，不需要先去信箱驗證。' }], [qr('重新開啟網頁', '儀表板' + (cmd.ticker ? ' ' + cmd.ticker : ''))]);
       return [flex("開啟儀表板", bubble([txt(cmd.ticker ? `在儀表板開啟 ${cmd.ticker}` : "開啟儀表板", { weight: "bold", color: "#eef1f8" }),
-        ...(d.oneTime ? [txt("免登入，1 小時內有效、只能用一次。", { size: "xs", color: "#8a93a6" })] : [])], [link(d.url, "開啟")]))];
+        txt('點下方按鈕直接登入，不用收信。請使用這則最新連結；過期或已使用時，點「重新開啟網頁」。', { size: 'xs', color: '#8a93a6' })], [link(d.url, '直接開啟'), dashboardButton(cmd.ticker, '重新開啟網頁')]))];
     }
     case "stock": {
       if (isTw(cmd.ticker)) return twStock(cmd, db, dash);
@@ -565,7 +584,7 @@ export async function run(cmd, db, ctx) {
         watching = (await db.get(`user_watch?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}&select=ticker&limit=1`)).length > 0;
       } catch (_) { /* buttons still work without knowing the watch state */ }
       const t = cmd.ticker;
-      extra.url = (await dashLink(db, dash, t)).url;
+      extra.freshLogin = !!dash;
       return withQuick([stockCard(rows[0], sm[0], dash, extra)], [
         watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("大戶訊號", "大戶 " + t), qr("榜單", "榜單"), qr('解讀', '解讀 ' + t), qr('筆記', '讀筆記 ' + t),
       ]);
@@ -803,69 +822,20 @@ async function quotaText(fetchFn) {
   } catch (e) { return "查額度失敗：" + String(e).slice(0, 80); }
 }
 
-// Rich menu geometry; scripts/make_richmenu.py draws the images with the same numbers.
-export const MENU_W = 2500, MENU_H = 843, MENU_TAB_H = 170;
-export function menuAreas(cells) {
-  const tabs = [["trend-us", 0], ["trend-tw", MENU_W / 2]].map(([alias, x]) => ({
-    bounds: { x, y: 0, width: MENU_W / 2, height: MENU_TAB_H },
-    action: { type: "richmenuswitch", richMenuAliasId: alias, data: "menu=" + alias.slice(6) },
-  }));
-  const cw = Math.floor(MENU_W / 3), ch = Math.floor((MENU_H - MENU_TAB_H) / 2);
-  return [...tabs, ...cells.map((text, i) => ({
-    bounds: { x: (i % 3) * cw, y: MENU_TAB_H + Math.floor(i / 3) * ch, width: cw, height: ch }, action: { type: "message", text },
-  }))];
-}
-
 async function setupMenu(fetchFn) {
-  const auth = { Authorization: "Bearer " + env("LINE_CHANNEL_TOKEN") };
-  const json = { ...auth, "Content-Type": "application/json" };
-  const dash = env("DASHBOARD_URL");
-  if (!dash) return "缺少 DASHBOARD_URL，無法取得選單圖片。";
-  const make = async (name, bar, file, cells, tabs = true) => {
-    const img = await fetchFn(dash.replace(/\/?$/, "/") + file);
-    if (!img.ok) throw new Error(`找不到選單圖片 ${file}（${img.status}）`);
-    const bytes = new Uint8Array(await img.arrayBuffer());
-    const c = await fetchFn("https://api.line.me/v2/bot/richmenu", {
-      method: "POST", headers: json,
-      body: JSON.stringify({ size: { width: MENU_W, height: MENU_H }, selected: true, name, chatBarText: bar, areas: menuAreas(cells).filter((a) => tabs || a.action.type !== "richmenuswitch") }),
-    });
-    if (!c.ok) throw new Error("建立選單失敗：" + c.status + " " + (await c.text()).slice(0, 200));
-    const { richMenuId } = await c.json();
-    const up = await fetchFn(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, { method: "POST", headers: { ...auth, "Content-Type": "image/png" }, body: bytes });
-    if (!up.ok) throw new Error("上傳圖片失敗：" + up.status + " " + (await up.text()).slice(0, 200));
-    return richMenuId;
-  };
-  const alias = async (id, richMenuId) => { // create, or point an existing alias at the new menu
-    const c = await fetchFn("https://api.line.me/v2/bot/richmenu/alias", { method: "POST", headers: json, body: JSON.stringify({ richMenuAliasId: id, richMenuId }) });
-    if (c.ok) return;
-    const u = await fetchFn(`https://api.line.me/v2/bot/richmenu/alias/${id}`, { method: "POST", headers: json, body: JSON.stringify({ richMenuId }) });
-    if (!u.ok) throw new Error(`設定分頁切換失敗（${id}）：` + u.status + " " + (await u.text()).slice(0, 120));
-  };
-  let us, tw;
+  const dash = env('DASHBOARD_URL');
+  if (!dash) return '缺少 DASHBOARD_URL，無法取得選單圖片。';
   try {
-    // first run: the tab buttons point at aliases that don't exist yet, so park the aliases on tab-less menus first
-    const al = await fetchFn("https://api.line.me/v2/bot/richmenu/alias/list", { headers: auth });
-    const have = new Set(al.ok ? ((await al.json()).aliases || []).map((a) => a.richMenuAliasId) : []);
-    if (!have.has("trend-us")) await alias("trend-us", await make("trend-menu-boot", "選單", "richmenu.png", MENU, false));
-    if (!have.has("trend-tw")) await alias("trend-tw", await make("trend-menu-boot", "選單", "richmenu_tw.png", MENU_TW, false));
-    us = await make("trend-menu", "美股選單", "richmenu.png", MENU);
-    tw = await make("trend-menu-tw", "台股選單", "richmenu_tw.png", MENU_TW);
-    await alias("trend-us", us);
-    await alias("trend-tw", tw);
-  } catch (e) { return String((e && e.message) || e); }
-  const def = await fetchFn(`https://api.line.me/v2/bot/user/all/richmenu/${us}`, { method: "POST", headers: auth });
-  if (!def.ok) return "設為預設失敗：" + def.status;
-  // remove the menus this bot made before, so repeated setups don't pile up
-  let removed = 0;
-  try {
-    const ls = await fetchFn("https://api.line.me/v2/bot/richmenu/list", { headers: auth });
-    const old = ls.ok ? ((await ls.json()).richmenus || []).filter((m) => String(m.name).startsWith("trend-menu") && m.richMenuId !== us && m.richMenuId !== tw) : [];
-    for (const m of old) {
-      const d = await fetchFn(`https://api.line.me/v2/bot/richmenu/${m.richMenuId}`, { method: "DELETE", headers: auth });
-      if (d.ok) removed++;
+    const images = {};
+    for (const [key, market] of Object.entries(menuConfig.markets)) {
+      const res = await fetchFn(dash.replace(/\/?$/, '/') + market.image + '?v=' + menuConfig.version,
+        { signal: AbortSignal.timeout(7500) });
+      if (!res.ok) throw new Error('找不到選單圖片（HTTP ' + res.status + '）');
+      images[key] = new Uint8Array(await res.arrayBuffer());
     }
-  } catch (_) { /* cleanup is best-effort */ }
-  return "選單已建立（美股／台股，點上方分頁切換）。" + (removed ? `已清掉 ${removed} 個舊選單。` : "");
+    await syncRichMenus(fetchFn, { token: env('LINE_CHANNEL_TOKEN'), owner: env('LINE_USER_ID'), images });
+    return '研究助理選單已更新（美股／台股）。現在可直接點「個股解讀」與「我的筆記」。';
+  } catch (error) { return '選單更新失敗：' + error.message; }
 }
 
 export async function handle(req, fetchFn = fetch) {

@@ -86,17 +86,28 @@
   }
 
   // ── boot & auth ─────────────────────────────────────────────────────────
-  function boot() {
-    const ready = window.supabase && window.Tabulator && window.Chart;
+  async function boot() {
+    const ready = window.supabase && window.Tabulator && window.Chart && window.LineAuth;
     if (!ready) { showNotice('<h2>程式庫載入失敗</h2><p>無法從 CDN 載入 Supabase、Tabulator 或 Chart.js。請檢查網路，或是否被廣告攔截器擋下。</p>'); return; }
     if (!CFG.SUPABASE_URL || /YOUR-PROJECT/.test(CFG.SUPABASE_URL) || !CFG.SUPABASE_ANON_KEY || /YOUR-ANON/.test(CFG.SUPABASE_ANON_KEY)) {
       showNotice('<h2>還沒設定連線</h2><p>打開 <b>docs/config.js</b>，填入 Supabase 的 Project URL 與 anon key（Project Settings → API）。</p>');
       return;
     }
+    const lineLogin = window.LineAuth.read(location, history);
     state.sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
 
     $('#signout').addEventListener('click', async () => { await state.sb.auth.signOut(); location.reload(); });
     $('#login-form').addEventListener('submit', onLogin);
+
+    if (lineLogin) {
+      showNotice('<h2>正在從 LINE 登入…</h2><p>不需要輸入 Email，請稍候。</p>');
+      const result = await window.LineAuth.signIn(state.sb.auth, lineLogin);
+      if (result.ok) return start();
+      showNotice(result.reason === 'expired'
+        ? '<h2>請從 LINE 重新開啟</h2><p>這則連結已使用或過期。回到 LINE，點卡片上的「開啟網頁」，或傳送「儀表板」，再點最新回覆的「直接開啟」。不需要到信箱驗證。</p>'
+        : '<h2>暫時無法登入</h2><p>請確認網路後，回到 LINE 傳送「儀表板」，再點最新的登入連結。</p>');
+      return;
+    }
 
     if (!CFG.REQUIRE_LOGIN) return start();
 
