@@ -358,6 +358,8 @@ def run_tw(store, today: dt.date | None = None) -> dict:
     if df.empty:
         raise RuntimeError("Nothing scorable in Taiwan after joining prices and revenue.")
     scored = compute_tw_scores(df)
+    from . import tw_value  # relative valuation (does not change the score)
+    scored = tw_value.add_relative_value(scored)
     from . import tw_inst  # big-money signals: institutional flows, pledging, insider filings (never fatal)
     scored = tw_inst.enrich(store, scored, hist)
     stats["main"] = int((scored["board"] == "tw_main").sum())
@@ -371,10 +373,17 @@ def run_tw(store, today: dt.date | None = None) -> dict:
     # Nullable pandas counts can become floats. PostgREST requires JSON
     # integers for integer columns, while unknown counts must remain null.
     count_cols = {"rev_streak", "revenue_months", "revenue_streak_months"}
+    value_cols = []
+    try:  # ps / rel_val need supabase/migrations/20261019_tw_relative_value.sql; skip quietly until it is applied
+        store.select("tw_signals", {"select": "ps,rel_val", "limit": "1"})
+        value_cols = ["ps", "rel_val"]
+    except Exception:  # noqa: BLE001
+        print("  tw relative value columns not created yet; skipped")
     store.upsert("tw_signals", [{"ticker": t, "as_of": as_of, "ym": r.get("ym"), "rev_cum_yoy": r.get("rev_cum_yoy"),
                                  "scoring_version": "tw-revenue-v3",
                                  **{c: (int(r[c]) if pd.notna(r.get(c)) else None) if c in count_cols else r.get(c) for c in cols},
-                                 **{c: r.get(c) for c in INST_COLS if c in scored.columns}}
+                                 **{c: r.get(c) for c in INST_COLS if c in scored.columns},
+                                 **{c: (None if pd.isna(r.get(c)) else float(r.get(c))) for c in value_cols}}
                                 for t, r in scored.iterrows()], "ticker,as_of")
     store.upsert("tw_scores", [
         {"ticker": t, "as_of": as_of, "board": r["board"], "rank": int(r["rank"]), "score": r["score"],

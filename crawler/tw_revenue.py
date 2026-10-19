@@ -130,6 +130,8 @@ def metrics(ticker, exchange, ym, history, today=None):
         base = sum(p[1] for p in window)
         return sum(p[0] for p in window) / base - 1 if len(window) == 3 and base > 0 else None
 
+    # Trailing-12-month revenue (thousand TWD); only when 12 consecutive months are on file.
+    out["rev_ttm"] = sum(p[0] for p in pairs[:12]) if len(pairs) >= 12 else None
     out["rev_3m_yoy"] = yoy(pairs[:3])
     out["rev_prev_3m_yoy"] = yoy(pairs[3:6])
     if out["rev_3m_yoy"] is not None and out["rev_prev_3m_yoy"] is not None:

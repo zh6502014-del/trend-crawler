@@ -805,6 +805,9 @@
         { title: '法人 20 日', field: 'inst_20d', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 3,
           headerTooltip: '近 20 日三大法人合計買賣超，占同期成交量的比例；正數是買超',
           formatter: (c) => `<span class="${tone(c.getValue())}">${spct(c.getValue(), 1)}</span>` },
+        { title: '相對估值', field: 'rel_val', width: 118, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4,
+          headerTooltip: '「成長加便宜」在全市場的百分位（0–100，越高越有利）：近 12 月營收的市值比越低、近 3 個月營收年增越高，分數越高。回測只有微弱訊號，是同業相對位置，不是目標價，也不計入分數。',
+          formatter: (c) => isNum(c.getValue()) ? `<span class="${c.getValue() >= 70 ? 'up' : c.getValue() <= 30 ? 'down' : ''}">${Math.round(c.getValue())}</span>` : '—' },
         { title: '市值', field: 'mkt_cap', width: 120, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 4, formatter: (c) => twd(c.getValue()) },
         { title: '日成交值', field: 'dollar_vol', width: 124, hozAlign: 'right', headerHozAlign: 'right', sorter: 'number', responsive: 5,
           headerTooltip: '20 日平均成交值', formatter: (c) => twd(c.getValue()) },
@@ -846,6 +849,8 @@
           <div><dt>三大法人 20 日</dt><dd class="${tone(d.inst_20d)}">${spct(d.inst_20d, 1)}</dd></div>
           <div><dt>外資 20 日</dt><dd class="${tone(d.foreign_20d)}">${spct(d.foreign_20d, 1)}</dd></div>
           <div><dt>投信 20 日</dt><dd class="${tone(d.trust_20d)}">${spct(d.trust_20d, 1)}</dd></div>
+          <div><dt>相對估值（成長加便宜）</dt><dd>${isNum(d.rel_val) ? Math.round(d.rel_val) + ' / 100' : '—'}</dd></div>
+          <div><dt>市值對近 12 月營收</dt><dd>${isNum(d.ps) ? nf(d.ps, 1) + ' 倍' : '—'}</dd></div>
           <div><dt>董監設質比例</dt><dd>${isNum(d.pledge_ratio) ? spct(d.pledge_ratio, 0).replace('+', '') : '—'}</dd></div>
         </dl>
         <p class="chart-note">法人欄位是買賣超股數除以同期成交股數，正數代表買超，只是參考線索，不計入分數。</p>
