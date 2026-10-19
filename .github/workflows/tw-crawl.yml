@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: "40 7 * * 1-5"
   workflow_dispatch:
+    inputs:
+      send_digest:
+        description: "Send the Taiwan digest after crawling (leave off for deployment verification)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,6 +38,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python -m crawler.tw
+      - name: Send Taiwan digest after a successful crawl
+        if: github.event_name == 'schedule' || inputs.send_digest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OWNER_UID: ${{ secrets.OWNER_UID }}
+          LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          LINE_MONTHLY_CAP: ${{ vars.LINE_MONTHLY_CAP || '100' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          DIGEST_MARKET: tw
+        run: python -m crawler.digest
       - name: Open or update a failure issue
         if: failure()
         env:

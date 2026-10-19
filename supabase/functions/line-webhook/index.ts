@@ -2,6 +2,8 @@
 // Secrets (Supabase > Edge Functions > Secrets): LINE_CHANNEL_SECRET, LINE_CHANNEL_TOKEN, LINE_USER_ID, DASHBOARD_URL (optional).
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase. Deploy with JWT verification OFF (LINE has no JWT);
 // the request is authenticated by the LINE signature instead.
+import { resolveInput, nextSession, cleanName } from './assistant.ts';
+import { explain } from './ai.ts';
 const env = (k) => (typeof Deno !== "undefined" ? Deno.env.get(k) : process.env[k]) || "";
 
 const TAGS = { insider_cluster: "內部人群買", insider_buy: "內部人買進", activist_13d: "13D 積極持有", new_5pct: "新增 5% 持有人" };
@@ -294,6 +296,8 @@ export function helpText() {
     "自選　自選股現況",
     "加 NRXS 2330／刪 NRXS　可一次多檔",
     "筆記 NRXS 內容　寫筆記",
+    "筆記 NRXS　讀筆記；搜尋筆記 關鍵字",
+    "解讀 NRXS　資料解讀；新話題　重設上下文",
     "提醒 NRXS　點選條件設提醒",
     "提醒清單／刪提醒 NRXS",
     "",
@@ -351,10 +355,10 @@ function makeDb(fetchFn) {
   let uid = env("OWNER_UID") || null;
   const ownerId = async () => {
     if (uid) return uid;
-    const r = await fetchFn(base + "/auth/v1/admin/users?per_page=5", { headers: h });
+    const r = await fetchFn(base + "/auth/v1/admin/users?per_page=2", { headers: h, ...sig() });
     if (!r.ok) throw new Error("auth " + r.status);
     const users = (await r.json()).users || [];
-    if (!users.length) throw new Error("no dashboard user yet");
+    if (users.length !== 1) throw new Error("Set OWNER_UID when the dashboard does not have exactly one user");
     uid = users[0].id;
     email = users[0].email || null;
     return uid;
@@ -363,11 +367,11 @@ function makeDb(fetchFn) {
   // owner straight in. Single use, expires with the project's OTP expiry (default 1 hour). Only ever sent to the owner.
   let email = null;
   const magicLink = async (redirectTo) => {
+    await ownerId();
     if (!email) {
-      const r = await fetchFn(base + "/auth/v1/admin/users?per_page=5", { headers: h, ...sig() });
+      const r = await fetchFn(base + "/auth/v1/admin/users/" + encodeURIComponent(uid), { headers: h, ...sig() });
       if (!r.ok) return null;
-      const users = (await r.json()).users || [];
-      const u = uid ? users.find((x) => x.id === uid) : users[0];
+      const data = await r.json(), u = data.user || data;
       email = (u && u.email) || null;
     }
     if (!email) return null;
@@ -378,7 +382,12 @@ function makeDb(fetchFn) {
     const j = await r.json();
     return j.action_link || (j.properties && j.properties.action_link) || null;
   };
-  return { get, send, ownerId, magicLink };
+  const rpc = async (name, body) => {
+    const r = await fetchFn(base + '/rest/v1/rpc/' + name, { method: 'POST', headers: h, body: JSON.stringify(body), ...sig() });
+    if (!r.ok) throw new Error('rpc ' + name + ' ' + r.status);
+    return r.json();
+  };
+  return { get, send, ownerId, magicLink, rpc };
 }
 
 // ── pure summaries (exported for tests) ─────────────────────────────────────
@@ -493,6 +502,7 @@ async function twStock(cmd, db, dash) {
   extra.url = (await dashLink(db, dash, t)).url;
   return withQuick([twStockCard(r, extra)], [
     watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("法人動向", "大戶 " + t), qr("台股榜單", "台股"),
+    qr('解讀', '解讀 ' + t), qr('筆記', '讀筆記 ' + t),
     ...(r.sector ? [qr(("同產業 " + r.sector).slice(0, 20), "台股產業 " + r.sector)] : []),
   ]);
 }
@@ -501,6 +511,25 @@ export async function run(cmd, db, ctx) {
   const dash = env("DASHBOARD_URL");
   const enc = encodeURIComponent;
   switch (cmd.cmd) {
+    case 'message': return withQuick([{ type: 'text', text: cmd.text }], (cmd.choices || []).map((x) => qr(x.label, x.text)));
+    case 'reset': return withQuick([{ type: 'text', text: '已重設目前市場、股票與頁碼。' }], MAIN_QUICK);
+    case 'explain': case 'explanation': return explain(cmd, db, ctx);
+    case 'notes': {
+      const uid = await db.ownerId(), q = cleanName(cmd.q);
+      const rows = await db.get(`user_watch?user_id=eq.${uid}&note=neq.&select=ticker,note,updated_at&order=updated_at.desc&limit=10${q ? '&note=ilike.*' + enc(q) + '*' : ''}`);
+      if (!rows.length) return [{ type: 'text', text: q ? `沒有符合「${q}」的筆記。` : '還沒有筆記。例：筆記 2330 關注下次營收。' }];
+      return withQuick([{ type: 'text', text: '最近筆記（最多 10 筆）：\n' + rows.map((r) => `${r.ticker}：${r.note.slice(0, 200)}`).join('\n\n') }], rows.map((r) => qr(r.ticker, '讀筆記 ' + r.ticker)));
+    }
+    case 'readnote': case 'clearnote': {
+      const uid = await db.ownerId();
+      const path = `user_watch?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}`;
+      if (cmd.cmd === 'clearnote') {
+        await db.send('PATCH', path, { note: '', updated_at: new Date().toISOString() });
+        return [{ type: 'text', text: `已清除 ${cmd.ticker} 筆記。` }];
+      }
+      const row = (await db.get(path + '&select=note&limit=1'))[0];
+      return withQuick([{ type: 'text', text: `${cmd.ticker} 筆記：\n${row?.note || '尚未記錄。'}\n\n輸入「筆記 ${cmd.ticker} 內容」可更新。` }], [qr('查看股票', cmd.ticker)]);
+    }
     case "help": return withQuick([{ type: "text", text: helpText() }], MAIN_QUICK);
     case "more": {
       const d = await dashLink(db, dash);
@@ -538,7 +567,7 @@ export async function run(cmd, db, ctx) {
       const t = cmd.ticker;
       extra.url = (await dashLink(db, dash, t)).url;
       return withQuick([stockCard(rows[0], sm[0], dash, extra)], [
-        watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("大戶訊號", "大戶 " + t), qr("榜單", "榜單"),
+        watching ? qr("移出自選", "刪 " + t) : qr("加入自選", "加 " + t), qr("設提醒", "提醒 " + t), qr("大戶訊號", "大戶 " + t), qr("榜單", "榜單"), qr('解讀', '解讀 ' + t), qr('筆記', '讀筆記 ' + t),
       ]);
     }
     case "compare": {
@@ -590,6 +619,8 @@ export async function run(cmd, db, ctx) {
       return withQuick(msgs, [qr("今日", "今日"), qr("週報", "週報"), qr("榜單", "榜單"), qr("更多功能", "更多功能")]);
     }
     case "add": case "del": case "note": {
+      if (cmd.cmd === 'note' && !cmd.text) return run({ cmd: 'readnote', ticker: cmd.ticker }, db, ctx);
+      if (cmd.cmd === 'note' && cmd.text.length > 2000) return [{ type: 'text', text: '筆記請控制在 2,000 字以內。' }];
       const uid = await db.ownerId();
       const list = cmd.tickers && cmd.tickers.length ? cmd.tickers : [cmd.ticker];
       if (cmd.cmd === "del") {
@@ -699,8 +730,10 @@ export async function run(cmd, db, ctx) {
       if (!ex.length) return [{ type: "text", text: `找不到 ${cmd.ticker}，沒有設定。` }];
       const mine = await db.get(`user_alerts?user_id=eq.${uid}&fired_at=is.null&select=id`);
       if (mine.length >= 20) return [{ type: "text", text: "未觸發的提醒已達 20 則上限，先刪一些。" }];
+      const same = await db.get(`user_alerts?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}&metric=eq.${cmd.metric}&op=eq.${enc(cmd.op)}&value=eq.${cmd.value}&fired_at=is.null&select=id&limit=1`);
+      if (same.length) return [{ type: 'text', text: '相同條件的提醒已存在。' }];
       await db.send("POST", "user_alerts", [{ user_id: uid, ticker: cmd.ticker, metric: cmd.metric, op: cmd.op, value: cmd.value }]);
-      return [{ type: "text", text: `已設定：${cmd.ticker} ${cmd.metric === "score" ? "分數" : "排名"}${cmd.op}${cmd.value}。條件成立時會放進下一次每日摘要（台北早上），只通知一次。${isTw(cmd.ticker) ? "台股以前一個交易日收盤後的分數判斷。" : ""}` }];
+      return [{ type: "text", text: `已設定：${cmd.ticker} ${cmd.metric === "score" ? "分數" : "排名"}${cmd.op}${cmd.value}。以收盤後更新的分數判斷，條件成立時放進該市場下一次摘要，只通知一次；非盤中即時提醒。` }];
     }
     case "alerts": {
       const uid = await db.ownerId();
@@ -740,7 +773,7 @@ export async function verifySignature(body, signature, secret) {
 
 export const TIMEOUT_MS = 8000; // reply tokens last ~1 minute; answer within 8s or say so
 const TIMEOUT = Symbol("timeout");
-const WRITE_CMDS = new Set(["add", "del", "note", "alert", "delalert", "menu"]);
+const WRITE_CMDS = new Set(["add", "del", "note", "clearnote", "alert", "delalert", "menu"]);
 export const timeoutText = (cmd) => WRITE_CMDS.has(cmd.cmd)
   ? "資料庫回應太慢（超過 8 秒）。這個操作可能已完成，請用「自選」或「提醒清單」確認。"
   : "資料庫回應太慢（超過 8 秒），可能剛從休眠醒來。請再輸入一次。";
@@ -751,20 +784,11 @@ function withTimeout(p, ms) {
   return Promise.race([p, to]).finally(() => clearTimeout(t));
 }
 
-const seen = new Map(); // webhookEventId -> time; only guards redelivery inside one warm instance
-const fresh = (id) => {
-  const now = Date.now();
-  for (const [k, t] of seen) if (now - t > 600000) seen.delete(k);
-  if (!id) return true;
-  if (seen.has(id)) return false;
-  seen.set(id, now);
-  return true;
-};
-
 async function lineReply(fetchFn, replyToken, messages) {
   const r = await fetchFn("https://api.line.me/v2/bot/message/reply", {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env("LINE_CHANNEL_TOKEN") },
     body: JSON.stringify({ replyToken, messages: messages.slice(0, 5) }),
+    signal: AbortSignal.timeout(7500),
   });
   if (!r.ok) console.error("reply failed", r.status, (await r.text()).slice(0, 300));
 }
@@ -775,7 +799,7 @@ async function quotaText(fetchFn) {
     const [q, u] = await Promise.all([fetchFn("https://api.line.me/v2/bot/message/quota", { headers: h }), fetchFn("https://api.line.me/v2/bot/message/quota/consumption", { headers: h })]);
     if (!q.ok || !u.ok) return "查不到額度（" + q.status + "/" + u.status + "）。";
     const qj = await q.json(), uj = await u.json();
-    return `本月推播用量：${uj.totalUsage} / ${qj.type === "limited" ? qj.value : "無上限（付費方案）"}\n回覆訊息不計入。每日摘要最多 1 則，自設上限 100 則。`;
+    return `本月推播用量：${uj.totalUsage} / ${qj.type === "limited" ? qj.value : "依帳號方案"}\n回覆訊息不計入。台、美股分時摘要；推播上限 ${env('LINE_MONTHLY_CAP') || '100'} 則。`;
   } catch (e) { return "查額度失敗：" + String(e).slice(0, 80); }
 }
 
@@ -852,13 +876,33 @@ export async function handle(req, fetchFn = fetch) {
   let payload; try { payload = JSON.parse(body); } catch { return new Response("ok"); }
   const db = makeDb(fetchFn);
   for (const ev of payload.events || []) {
+    // Replies to group events are visible to everybody in that group, including sign-in links.
+    if (!owner || ev.source?.userId !== owner || ev.source?.type !== 'user') continue;
+    const menu = ev.type === 'postback' && /^menu=(us|tw)$/.exec(ev.postback?.data || '');
+    if (!menu && (ev.type !== 'message' || ev.message?.type !== 'text')) continue;
     try {
-      if (ev.type !== "message" || ev.message?.type !== "text") continue;
-      if (!owner || ev.source?.userId !== owner) continue; // only the owner; everyone else is ignored silently
-      if (!fresh(ev.webhookEventId)) continue;
-      const cmd = parseCommand(ev.message.text);
-      const out = await withTimeout(run(cmd, db, { setupMenu: () => setupMenu(fetchFn), quota: () => quotaText(fetchFn) }), TIMEOUT_MS);
-      await lineReply(fetchFn, ev.replyToken, out === TIMEOUT ? [{ type: "text", text: timeoutText(cmd) }] : out);
+      if (!ev.webhookEventId || !(await db.rpc('claim_line_event', { p_event_id: ev.webhookEventId }))) continue;
+    } catch (_) {
+      // No durable claim = no side effects. Ask LINE to redeliver once storage is back.
+      return new Response('event storage unavailable', { status: 503 });
+    }
+    try {
+      let executing = { cmd: 'unknown' };
+      const task = async () => {
+        const uid = await db.ownerId();
+        const saved = (await db.get(`line_sessions?user_id=eq.${uid}&limit=1`))[0];
+        const session = saved && Date.now() - Date.parse(saved.updated_at) < 86400000 ? saved : {};
+        const cmd = menu ? { cmd: 'market', tw: menu[1] === 'tw' } : await resolveInput(ev.message.text, parseCommand, db, session, ALIASES);
+        executing = cmd;
+        const next = nextSession(session, cmd);
+        const out = menu ? [] : await run(cmd, db, { fetchFn, setupMenu: () => setupMenu(fetchFn), quota: () => quotaText(fetchFn),
+          waitUntil: typeof EdgeRuntime !== 'undefined' ? (p) => EdgeRuntime.waitUntil(p) : undefined });
+        await db.send('POST', 'line_sessions?on_conflict=user_id', { user_id: uid, ...next, updated_at: new Date(ev.timestamp || Date.now()).toISOString() }, 'resolution=merge-duplicates,return=minimal');
+        return out;
+      };
+      const out = await withTimeout(task(), TIMEOUT_MS);
+      if (menu) continue;
+      await lineReply(fetchFn, ev.replyToken, out === TIMEOUT ? [{ type: "text", text: timeoutText(executing) }] : out);
     } catch (e) {
       console.error("event failed", String(e));
       try { await lineReply(fetchFn, ev.replyToken, [{ type: "text", text: "查詢失敗，稍後再試。" }]); } catch (_) { /* ignore */ }
