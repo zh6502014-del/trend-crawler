@@ -21,12 +21,12 @@ export async function resolveInput(raw, parse, db, session = {}, aliases = {}) {
     '移出自選': 'del', '把它移出自選': 'del', '設提醒': 'alertmenu',
     '提醒這檔': 'alertmenu', '取消提醒': 'delalert', '看筆記': 'readnote',
     '法人': 'smart', '看法人': 'smart', '這檔': 'stock',
-    '解讀': 'explain', '解釋這檔': 'explain', '這檔為什麼分數變高': 'explain',
+    '解讀': 'explain', '個股解讀': 'explain', '解釋這檔': 'explain', '這檔為什麼分數變高': 'explain',
     '查看解讀': 'explanation', '查看結果': 'explanation',
   };
   if (currentActions[text]) return session.ticker
     ? { cmd: currentActions[text], ticker: session.ticker }
-    : message('先輸入股票代號或名稱，再選擇這個操作。');
+    : currentActions[text] === 'explain' ? { cmd: 'explainhelp' } : message('先輸入股票代號或名稱，再選擇這個操作。');
 
   let action, query;
   const namedAdd = text.match(/^(?:把|將)?\s*(.+?)\s*(加入|加到|移出|移除)(?:我的)?自選(?:清單)?$/);
@@ -71,7 +71,7 @@ export async function resolveInput(raw, parse, db, session = {}, aliases = {}) {
   if (explicit && /美股|us/i.test(explicit[1])) text = explicit[2] || '榜單';
   const cmd = parse(text);
   if (cmd.cmd === 'note' && !cmd.text) cmd.cmd = 'readnote';
-  if (['top', 'today', 'week', 'report', 'industry', 'smart'].includes(cmd.cmd) && !cmd.ticker) cmd.tw = market === 'tw';
+  if (['top', 'today', 'week', 'report', 'industry', 'smart', 'more'].includes(cmd.cmd) && !cmd.ticker) cmd.tw = market === 'tw';
   return cmd;
 }
 

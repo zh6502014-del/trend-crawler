@@ -36,6 +36,10 @@
 
 上下文只保存市場、股票與頁碼，閒置 24 小時後不再使用。快速選單的美股／台股分頁也會更新市場。Bot 只接受 `LINE_USER_ID` 擁有者的一對一訊息；群組／聊天室事件不回覆。提醒是資料更新後的條件通知，並非即時股價提醒。
 
+底部研究助理選單提供「今日動態、主榜排名、自選清單、個股解讀、我的筆記、工具箱」。週報、大戶／法人、提醒與網頁入口保留在工具箱。圖片與按鈕共用 `menu.json`，由 `scripts/make_richmenu.py` 繪圖。
+
+從 LINE 開啟網頁時，先點卡片／工具箱的「開啟網頁」，Bot 才產生新的短效登入連結；點最新回覆的「直接開啟」即可，不寄 Email。Supabase token hash 放在網址 fragment，由網頁直接交換登入狀態，不經驗證網址重新導向。連結仍然只能使用一次、依專案 OTP 設定到期；既有登入有效時可繼續用，失效時網頁提示回 LINE 傳送「儀表板」。舊訊息中的連結不會被部署改寫，請使用新回覆。
+
 ## 部署
 
 1. 原有的 `supabase/schema.sql` 與 `supabase/schema_tw.sql` 資料表須已建立。此次新增的是 `supabase/schema_line.sql`，不修改既有評分與筆記資料。
@@ -44,6 +48,8 @@
 4. 若部署 token 沒有資料庫 SQL 權限，可先在該專案的 Supabase SQL Editor 執行完整 `supabase/schema_line.sql`，再重跑部署；既有 `SUPABASE_SERVICE_KEY` 即可確認版本，不必增加部署 token 權限。版本函式只授權 service role，並在 SQL 交易完成後才生效。日後變更 SQL 須同步更新 schema 與 Python 腳本的版本值。自動執行 SQL 仍需 Management API 權限，參考 [Run a query API](https://supabase.com/docs/reference/api/v1-run-a-query)。
 5. 確認 LINE Webhook 指向 `/functions/v1/line-webhook`，開啟 webhook 與重新傳送。部署維持 JWT verification 關閉，由 LINE 簽章驗證請求。
 6. 在自己的 LINE 私聊依序驗收：`說明`、`台股 2`、`下一頁`、股票名稱、`加入自選`、寫／讀筆記、`額度`。`解讀` 在未啟用 AI 時也應回覆數據摘要。
+
+部署也會等待 GitHub Pages 更新登入頁，實測一次產生／交換短效 token（不寄信，僅登出該測試 session），然後更新 Bot，最後同步兩張 LINE 選單。同步直接上傳儲存庫內圖片，核對圖片雜湊、分頁 alias、預設與擁有者個人綁定，保留原本台股／美股選擇。相同內容重跑不重建，既有選單保留供回復，不會自動刪除。參考 [LINE 個人選單優先順序](https://developers.line.biz/en/docs/messaging-api/use-per-user-rich-menus/) 與 [Supabase token hash 驗證](https://supabase.com/docs/reference/javascript/auth-verifyotp)。
 
 美股原排程於台北時間週二至週六 05:30 開始爬蟲，完成後發美股摘要；台股於週一至週五 15:40 開始爬蟲，完成後發台股摘要。GitHub 排程可能延遲。沒有新快照或異動時不發送。
 

@@ -146,7 +146,7 @@ test("parse: compare, paging, natural add/del", () => {
   assert.equal(parseCommand("NRXS 怎麼樣").cmd, "stock");
 });
 
-test("menu and commands: cashtag, more, batch add/del", () => {
+test("menu and commands: cashtag, more, batch add/del", async () => {
   assert.equal(parseCommand("$nrxs").ticker, "NRXS");
   assert.equal(parseCommand("更多功能").cmd, "more");
   assert.equal(parseCommand("更多").cmd, "top");                 // still "next page"
@@ -155,7 +155,8 @@ test("menu and commands: cashtag, more, batch add/del", () => {
   assert.equal(parseCommand("刪提醒 NRXS").cmd, "delalert");      // not swallowed by batch delete
   assert.equal(parseCommand("加 NRXS").ticker, "NRXS");
   // every rich-menu cell must be a real command
-  for (const t of MENU) assert.notEqual(parseCommand(t).cmd, "unknown", t);
+  const { resolveInput } = await import('../supabase/functions/line-webhook/assistant.ts');
+  for (const t of MENU) assert.notEqual((await resolveInput(t, parseCommand, mkDb({}))).cmd, 'unknown', t);
 });
 
 test("suggest finds the intended command", () => {
@@ -173,11 +174,11 @@ test("unknown text replies with suggestions or main buttons", async () => {
   assert.ok(b[0].quickReply.items.length >= 5);
 });
 
-test("more card has buttons and a dashboard link", async () => {
+test("more card has tools and a fresh dashboard login action", async () => {
   process.env.DASHBOARD_URL = "https://x.github.io/trend/";
   const out = await run({ cmd: "more" }, mkDb({}), {});
   const s = JSON.stringify(out[0]);
-  assert.match(s, /募資/); assert.match(s, /成績單/); assert.match(s, /開啟儀表板/);
+  assert.match(s, /募資/); assert.match(s, /成績單/); assert.match(s, /開啟網頁/);
   delete process.env.DASHBOARD_URL;
 });
 
@@ -215,20 +216,26 @@ test("dashboard: one-time sign-in link, with ticker and fallbacks", async () => 
   assert.deepEqual(await dashLink(db, ""), { url: "", oneTime: false });
 });
 
-test("stock card and 更多 carry the sign-in link", async () => {
+test("stock cards and tools request fresh dashboard links only when clicked", async () => {
   process.env.DASHBOARD_URL = "https://u.github.io/trend/";
   const db = mkDb({ "latest_board?ticker=eq.NRXS": [board], "user_watch": [] });
-  db.magicLink = async () => "https://p.supabase.co/auth/v1/verify?token=abc";
+  let generated = 0;
+  db.magicLink = async () => { generated++; return "https://u.github.io/trend/#line_token=" + 'a'.repeat(64) + '&type=email'; };
   const card = await run({ cmd: "stock", ticker: "NRXS" }, db, {});
-  assert.match(JSON.stringify(card[0]), /verify\?token=abc/);
+  assert.equal(card[0].contents.footer.contents[0].action.type, 'message');
+  assert.equal(card[0].contents.footer.contents[0].action.text, '儀表板 NRXS');
   const more = await run({ cmd: "more" }, db, {});
-  assert.match(JSON.stringify(more[0]), /verify\?token=abc/);
-  assert.match(JSON.stringify(more[0]), /只能用一次/);
+  assert.equal(more[0].contents.footer.contents[0].action.text, '儀表板');
+  assert.equal(generated, 0, 'viewing stocks must not invalidate a previous login link');
   const d = await run({ cmd: "dash", ticker: "NRXS" }, db, {});
-  assert.match(JSON.stringify(d[0]), /verify\?token=abc/);
+  assert.match(JSON.stringify(d[0]), /line_token=/);
+  assert.equal(generated, 1);
+  db.magicLink = async () => null;
+  const failed = await run({cmd:'dash'}, db, {});
+  assert.match(failed[0].text, /暫時無法建立/);
+  assert.ok(!JSON.stringify(failed).includes('"type":"uri"'));
   delete process.env.DASHBOARD_URL;
 });
-
 // ── Taiwan ────────────────────────────────────────────────────────────────
 const twRow = { ticker: "2330", name: "台積電", sector: "半導體業", exchange: "TWSE", board: "tw_main", rank: 3, score: 72.5, score_7d: 70,
   growth: 60, validated: 70, accessibility: 40, attention: 50, price: 1050, rev_yoy: 0.36, rev_cum_yoy: 0.31, ym: "11509",
@@ -326,38 +333,4 @@ test("tabbed rich menus: geometry and switch actions", () => {
   }
   assert.equal(a[2].bounds.y, MENU_TAB_H);
   assert.equal(a[7].action.text, "更多功能");
-});
-
-test("設定選單: first run parks aliases, builds both menus, repoints aliases, cleans old ones", async () => {
-  process.env.DASHBOARD_URL = "https://u.github.io/trend/"; process.env.LINE_CHANNEL_SECRET = "s"; process.env.LINE_USER_ID = "U1";
-  process.env.LINE_CHANNEL_TOKEN = "t"; process.env.SUPABASE_URL = "http://db"; process.env.SUPABASE_SERVICE_ROLE_KEY = "k";
-  const { handle } = await import("../supabase/functions/line-webhook/index.ts");
-  const calls = []; let n = 0; const aliases = {};
-  const ok = (j) => ({ ok: true, status: 200, json: async () => j, text: async () => "", arrayBuffer: async () => new ArrayBuffer(4) });
-  const fetchFn = async (url, opt = {}) => {
-    const m = opt.method || "GET"; calls.push(m + " " + url);
-    if (url.includes("/auth/v1/admin/users")) return ok({users:[{id:"u1",email:"owner@example.invalid"}]});
-    if (url.includes("/rest/v1/line_sessions")) return ok([]);
-    if (url.endsWith(".png")) return ok({});
-    if (url.endsWith("/richmenu/alias/list")) return ok({ aliases: [] });
-    if (url.endsWith("/v2/bot/richmenu") && m === "POST") {
-      const b = JSON.parse(opt.body);
-      for (const a of b.areas) if (a.action.type === "richmenuswitch" && !aliases[a.action.richMenuAliasId]) return { ok: false, status: 400, text: async () => "alias not found" };
-      return ok({ richMenuId: "rm" + (++n) });
-    }
-    if (url.endsWith("/richmenu/alias") && m === "POST") { const b = JSON.parse(opt.body); if (aliases[b.richMenuAliasId]) return { ok: false, status: 400, text: async () => "dup" }; aliases[b.richMenuAliasId] = b.richMenuId; return ok({}); }
-    if (/\/richmenu\/alias\/trend-/.test(url)) { aliases[url.split("/").pop()] = JSON.parse(opt.body).richMenuId; return ok({}); }
-    if (url.endsWith("/richmenu/list")) return ok({ richmenus: [{ name: "trend-menu", richMenuId: "old1" }, { name: "trend-menu-boot", richMenuId: "rm1" }, { name: "other", richMenuId: "x" }, ...Object.values(aliases).map((id) => ({ name: "trend-menu", richMenuId: id }))] });
-    if (url.includes("api.line.me/v2/bot/message/reply")) { calls.reply = JSON.parse(opt.body); return ok({}); }
-    return ok({});
-  };
-  const body = JSON.stringify({ events: [{ type: "message", webhookEventId: "menu1", replyToken: "rt", source: { type: "user", userId: "U1" }, message: { type: "text", text: "設定選單" } }] });
-  const mac = Buffer.from(await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", new TextEncoder().encode("s"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), new TextEncoder().encode(body))).toString("base64");
-  await handle(new Request("http://x", { method: "POST", body, headers: { "x-line-signature": mac } }), fetchFn);
-  assert.match(calls.reply.messages[0].text, /選單已建立（美股／台股/);
-  assert.equal(aliases["trend-us"], "rm3"); assert.equal(aliases["trend-tw"], "rm4");      // repointed to the tabbed menus
-  assert.ok(calls.includes("DELETE https://api.line.me/v2/bot/richmenu/old1") && calls.includes("DELETE https://api.line.me/v2/bot/richmenu/rm1"));
-  assert.ok(!calls.includes("DELETE https://api.line.me/v2/bot/richmenu/x"));
-  assert.ok(calls.includes("POST https://api.line.me/v2/bot/user/all/richmenu/rm3"));
-  delete process.env.DASHBOARD_URL;
 });

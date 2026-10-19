@@ -5,11 +5,15 @@ name: deploy-line-bot
 on:
   push:
     branches: [main]
-    paths: ["supabase/functions/**", "supabase/schema_line.sql", "scripts/apply_line_schema.py", "crawler/digest.py", ".github/workflows/deploy-line-bot.yml", ".github/workflows/checks.yml"]
+    paths: ["supabase/functions/**", "supabase/schema_line.sql", "scripts/apply_line_schema.py", "scripts/sync_line_menu.mjs", "scripts/check_line_login.mjs", "docs/line-auth.js", "docs/richmenu*.png", "crawler/digest.py", ".github/workflows/deploy-line-bot.yml", ".github/workflows/checks.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: line-production-deploy
+  cancel-in-progress: false
 
 jobs:
   checks:
@@ -22,6 +26,9 @@ jobs:
       PROJECT_REF: jxpnamaomzztqqahixvp
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
       - uses: supabase/setup-cli@v1
         with:
           version: latest
@@ -29,6 +36,12 @@ jobs:
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python3 scripts/apply_line_schema.py
+      - name: Verify dashboard login before updating the function
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OWNER_UID: ${{ secrets.OWNER_UID }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+        run: node scripts/check_line_login.mjs
       - name: Set function secrets
         env:
           LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
@@ -54,3 +67,8 @@ jobs:
         run: |
           [ -f supabase/config.toml ] || supabase init
           supabase functions deploy line-webhook --project-ref "$PROJECT_REF" --no-verify-jwt
+      - name: Synchronize and verify LINE rich menus
+        env:
+          LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: node scripts/sync_line_menu.mjs

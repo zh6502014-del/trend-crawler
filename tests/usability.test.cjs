@@ -291,6 +291,7 @@ task('I37','首次重建期間標示舊版榜單','過渡資料維持可讀，�
     __data.latest_board.forEach(r=>{r.batch_id=null;r.scoring_version='legacy-unverified';r.published_at=null;});
   });
   await p.locator('#reload').click();await p.waitForFunction(()=>!document.querySelector('#reload').disabled);
+  await p.locator(rows).first().waitFor();
   assert.ok(await count(p)>0);
   assert.match(await text(p,'#banner'),/舊版美股榜單.*尚未通過.*完整批次/);
   await p.locator('[data-tab=research]').click();
