@@ -8,6 +8,7 @@ Read-only inputs: scores (history of the lists) and price_days (the cached daily
 from __future__ import annotations
 
 import datetime as dt
+import os
 
 TOP_N = 20
 HORIZONS = (5, 20)
@@ -78,8 +79,25 @@ def run_report(store, today: dt.date | None = None) -> dict:
     if not cohorts:
         print("  report: no score history yet")
         return {"cohorts": 0, "rows": 0}
-    pd_rows = store.select("price_days", {"select": "day,bars", "day": f"gte.{min(cohorts).isoformat()}"}, page=10)
-    closes = {_d(r["day"]): {t: v[0] for t, v in (r["bars"] or {}).items() if v and v[0] is not None} for r in pd_rows}
+    pd_rows = store.select("price_days", {"select": "*", "day": f"gte.{min(cohorts).isoformat()}"}, page=10)
+    raw_rows = [r for r in pd_rows if r.get("format") == "massive_raw_v1"]
+    if raw_rows and len(raw_rows) != len(pd_rows):
+        # A failed initial price refresh can leave a mixture of old adjusted and new raw days.
+        # Keep the prior report until the raw cache is complete; mixing bases invents returns.
+        return {"cohorts": len(cohorts), "rows": 0,
+                "warnings": ["Report deferred: the raw price-cache migration is incomplete"]}
+    if raw_rows:
+        from .massive_prices import Client, fetch_splits, frames_from_bars
+        key = os.getenv("MASSIVE_API_KEY") or os.getenv("POLYGON_API_KEY")
+        if not key:
+            raise RuntimeError("MASSIVE_API_KEY is required to adjust raw report prices")
+        by_day = {_d(r["day"]): r["bars"] for r in raw_rows}
+        tickers = {t for names in boards.values() for t in names}
+        splits = fetch_splits(Client(key), min(by_day), max(by_day))
+        adjusted, _ = frames_from_bars(by_day, list(tickers), splits)
+        closes = {day.date(): row.dropna().to_dict() for day, row in adjusted.iterrows()}
+    else:
+        closes = {_d(r["day"]): {t: v[0] for t, v in (r["bars"] or {}).items() if v and v[0] is not None} for r in pd_rows}
     out = compute_report(cohorts, closes, boards=boards)
     if out:
         try:

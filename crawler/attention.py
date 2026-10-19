@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import re
 import time
+import datetime as dt
 
 import requests
 
 from . import config as cfg
+from .store import utcnow
 
 HN_URL = "https://hn.algolia.com/api/v1/search_by_date"
 _SUFFIX = re.compile(
@@ -70,3 +72,43 @@ def fetch_all(names: dict[str, str], now_ts: int | None = None) -> dict[str, int
                 break
         time.sleep(cfg.HN_PAUSE)
     return out
+
+
+def fetch_cached(store, names: dict[str, str], now=None):
+    """Cache successful lookups only; a source failure stays unknown, never zero."""
+    now = now or utcnow()
+    cache = {r["ticker"]: r for r in store.select("attention_cache", {"order": "ticker"})}
+    values, timestamps, pending = {}, {}, {}
+    stats = {"cached": 0, "refreshed": 0, "failed": 0, "unsearchable": 0}
+    for ticker, name in names.items():
+        query = clean_name(name)
+        if not query:
+            values[ticker] = None
+            stats["unsearchable"] += 1
+            continue
+        r = cache.get(ticker, {})
+        try:
+            fetched = dt.datetime.fromisoformat(r["fetched_at"].replace("Z", "+00:00"))
+            fresh = dt.timedelta(0) <= now - fetched < dt.timedelta(hours=cfg.HN_CACHE_HOURS)
+        except (KeyError, TypeError, ValueError):
+            fresh = False
+        if (fresh and not cfg.FULL_REFRESH and r.get("query") == query
+                and r.get("window_days") == cfg.HN_WINDOW_DAYS and r.get("mentions") is not None):
+            values[ticker], timestamps[ticker] = r["mentions"], r["fetched_at"]
+            stats["cached"] += 1
+        else:
+            pending[ticker] = name
+    fetched = fetch_all(pending) if pending else {}
+    rows = []
+    for ticker, name in pending.items():
+        value = fetched.get(ticker)
+        values[ticker] = value
+        if value is None:
+            stats["failed"] += 1
+            continue
+        timestamps[ticker] = now.isoformat()
+        rows.append({"ticker": ticker, "query": clean_name(name), "window_days": cfg.HN_WINDOW_DAYS,
+                     "mentions": int(value), "fetched_at": now.isoformat()})
+        stats["refreshed"] += 1
+    store.upsert("attention_cache", rows, "ticker")
+    return values, timestamps, stats

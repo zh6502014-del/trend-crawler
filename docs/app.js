@@ -4,6 +4,7 @@
 (() => {
   'use strict';
 
+  const Research = window.Research;
   const CFG = window.APP_CONFIG || {};
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -37,10 +38,12 @@
   const daysUntil = (iso) => Math.round((Date.parse(iso + 'T00:00:00Z') - Date.parse(todayStr() + 'T00:00:00Z')) / 86400000);
   const store = {
     get(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: views just won't persist */ } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
   };
 
   const FLAGS = {
+    revenue_history_short: { label: '營收歷史待補', tone: 'warn', help: '尚未取得可比較的連續六個月營收；缺漏不代表零成長。' },
+    stale_revenue: { label: '營收月份過期', tone: 'warn', help: '最近營收月份較舊，請核對資料來源。' },
     short_runway: { label: '現金跑道短', tone: 'bad', help: '最近一季淨利為負，若虧損持續，以現有現金估計撐不到一年。' },
     deep_loss: { label: '虧損深', tone: 'bad', help: '淨利率遠低於零，每賺一塊錢營收就虧很多。' },
     high_debt: { label: '負債高', tone: 'warn', help: '負債權益比偏高，景氣或利率變差時更脆弱。' },
@@ -52,16 +55,49 @@
     high_pledge: { label: '董監設質高', tone: 'warn', help: '董事與監察人持股中，已質押的比例達 30% 以上；股價下跌時可能被迫補繳或賣股。' },
     insider_selling: { label: '內部人申報轉讓', tone: 'warn', help: '內部人申報預定轉讓（可能是賣出、贈與或信託），股數達已發行股數 0.2% 以上。' },
     data_thin: { label: '資料不足', tone: '', help: '季度財報不足四季或缺毛利率（金融業看淨利率），這個分數可信度較低。' },
+    stale_fundamentals: { label: '基本面待更新', tone: 'warn', help: '基本面已超過例行更新期限；更新失敗或仍在排隊，請查看來源日期。' },
   };
   const RISK = new Set(['short_runway', 'deep_loss', 'high_debt', 'dilution']);
 
   const state = {
-    sb: null, started: false, rows: [], raises: [], run: null,
+    sb: null, started: false, loading: false, controlsWired: false, runs: [], loadErrors: {}, rows: [], raises: [], run: null,
     watch: new Map(), tab: 'main', tq: '', tsector: '', tmin: 0, tgrow: false, ttpex: false, tinst: false, reportLoaded: {}, q: '', sector: '', minScore: 0, hideRisk: false, rq: '', ropen: true,
     maxCap: 0, minStreak: 0, onlyNew: false, smartOnly: false, watchOnly: false, portal: '', soon: false, view: 'all', saved: [],
     stockTable: null, raiseTable: null, stockReady: false, raiseReady: false,
-    charts: [], current: null, lastFocus: null,
+    charts: [], current: null, lastFocus: null, reportRequest: 0, loginPending: false,
   };
+  const filterKey = 'trend-crawler.filters.v1';
+  const textFilters = ['q', 'sector', 'rq', 'portal', 'tq', 'tsector', 'view'];
+  const boolFilters = ['hideRisk', 'ropen', 'onlyNew', 'smartOnly', 'watchOnly', 'soon', 'tgrow', 'ttpex', 'tinst'];
+  const numberFilters = { minScore: 80, maxCap: Number.MAX_SAFE_INTEGER, minStreak: 100, tmin: 60 };
+  const tabs = ['research', 'main', 'watch', 'raise', 'heat', 'report', 'tw', 'twwatch', 'twheat', 'twreport', 'twresearch'];
+  const isTaiwan = () => state.tab.startsWith('tw');
+  function saveFilters() {
+    store.set(filterKey, Object.fromEntries(['tab', ...textFilters, ...boolFilters, ...Object.keys(numberFilters)].map((k) => [k, state[k]])));
+    renderFilterToggle();
+  }
+  function restoreFilters() {
+    const s = store.get(filterKey) || {};
+    for (const key of textFilters) if (typeof s[key] === 'string') state[key] = s[key];
+    for (const key of boolFilters) if (typeof s[key] === 'boolean') state[key] = s[key];
+    for (const [key, max] of Object.entries(numberFilters)) if (isNum(s[key])) state[key] = Math.max(0, Math.min(max, s[key]));
+    if (tabs.includes(s.tab)) state.tab = s.tab;
+  }
+
+  function syncFilters() {
+    for (const [id, key] of Object.entries({ 'f-q': 'q', 'f-sector': 'sector', 'f-min': 'minScore', 'r-q': 'rq', 'r-portal': 'portal', 't-q': 'tq', 't-sector': 'tsector', 't-min': 'tmin' })) $('#' + id).value = state[key];
+    for (const [id, key] of Object.entries({ 'f-risk': 'hideRisk', 'f-smart': 'smartOnly', 'f-watch': 'watchOnly', 'r-open': 'ropen', 'r-soon': 'soon', 't-grow': 'tgrow', 't-inst': 'tinst', 't-tpex': 'ttpex' })) $('#' + id).checked = state[key];
+    $('#f-min-out').textContent = state.minScore;
+    $('#t-min-out').textContent = state.tmin;
+  }
+
+  function renderFilterToggle() {
+    const keys = isTaiwan() ? ['tsector', 'tmin', 'tgrow', 'tinst', 'ttpex'] : state.tab === 'raise'
+      ? ['portal', 'ropen', 'soon'] : ['sector', 'minScore', 'hideRisk', 'maxCap', 'minStreak', 'onlyNew', 'smartOnly', 'watchOnly'];
+    const n = keys.filter((k) => state[k]).length;
+    const open = $('#filter-toggle').getAttribute('aria-expanded') === 'true';
+    $('#filter-toggle').textContent = `${open ? '收合' : '展開'}篩選${n ? `（${n}）` : ''}`;
+  }
 
   // ── small UI helpers ────────────────────────────────────────────────────
   function showNotice(html) {
@@ -87,7 +123,7 @@
 
   // ── boot & auth ─────────────────────────────────────────────────────────
   async function boot() {
-    const ready = window.supabase && window.Tabulator && window.Chart && window.LineAuth;
+    const ready = window.supabase && window.Tabulator && window.Chart && Research && window.LineAuth;
     if (!ready) { showNotice('<h2>程式庫載入失敗</h2><p>無法從 CDN 載入 Supabase、Tabulator 或 Chart.js。請檢查網路，或是否被廣告攔截器擋下。</p>'); return; }
     if (!CFG.SUPABASE_URL || /YOUR-PROJECT/.test(CFG.SUPABASE_URL) || !CFG.SUPABASE_ANON_KEY || /YOUR-ANON/.test(CFG.SUPABASE_ANON_KEY)) {
       showNotice('<h2>還沒設定連線</h2><p>打開 <b>docs/config.js</b>，填入 Supabase 的 Project URL 與 anon key（Project Settings → API）。</p>');
@@ -98,6 +134,9 @@
 
     $('#signout').addEventListener('click', async () => { await state.sb.auth.signOut(); location.reload(); });
     $('#login-form').addEventListener('submit', onLogin);
+    $('#reload').addEventListener('click', () => start(true));
+    restoreFilters();
+    $('#source-details').open = !matchMedia('(max-width: 720px)').matches;
 
     if (lineLogin) {
       showNotice('<h2>正在從 LINE 登入…</h2><p>不需要輸入 Email，請稍候。</p>');
@@ -111,24 +150,42 @@
 
     if (!CFG.REQUIRE_LOGIN) return start();
 
-    state.sb.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN') start(); });
-    state.sb.auth.getSession().then(({ data }) => {
-      if (data.session) start(); else $('#login').hidden = false;
+    state.sb.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN') start();
+      if (event === 'SIGNED_OUT') location.reload();
     });
+    state.sb.auth.getSession().then(({ data, error }) => {
+      if (error) showError(error, '無法讀取登入狀態');
+      if (data?.session) start(); else $('#login').hidden = false;
+    }).catch((e) => { $('#login').hidden = false; showError(e, '無法讀取登入狀態'); });
   }
 
   async function onLogin(ev) {
     ev.preventDefault();
+    if (state.loginPending) return;
     const email = $('#login-email').value.trim();
     const msg = $('#login-msg');
+    const button = $('#login-form button');
+    state.loginPending = true;
+    button.disabled = true;
+    $('#login-form').setAttribute('aria-busy', 'true');
     msg.textContent = '寄送中…';
-    const { error } = await state.sb.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false, emailRedirectTo: location.origin + location.pathname },
-    });
-    msg.textContent = error
-      ? '寄送失敗：' + error.message + '（這個 Email 需要先在 Supabase 的 Authentication → Users 建立。）'
-      : '已寄出。到信箱點開連結就會回到這個頁面。';
+    try {
+      const redirect = new URL(location.origin + location.pathname);
+      const ticker = new URLSearchParams(location.search).get('t');
+      if (ticker && /^[A-Za-z0-9.\-]{1,8}$/.test(ticker)) redirect.searchParams.set('t', ticker);
+      const { error } = await state.sb.auth.signInWithOtp({
+        email, options: { shouldCreateUser: false, emailRedirectTo: redirect.href },
+      });
+      if (error) throw error;
+      msg.textContent = '已寄出。到信箱點開連結就會回到這個頁面。';
+    } catch {
+      msg.textContent = '寄送失敗，請確認網路連線後重試。若仍無法寄出，請確認 Email 正確，並請管理員確認帳號已受邀。';
+    } finally {
+      state.loginPending = false;
+      button.disabled = false;
+      $('#login-form').removeAttribute('aria-busy');
+    }
   }
 
   // ── data ────────────────────────────────────────────────────────────────
@@ -143,99 +200,174 @@
     }
   }
 
-  async function start() {
-    if (state.started) return;
+  async function loadBoard(sb) {
+    // A publication may change while pages are loading. Retry instead of mixing batches.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rows = await pageAll((a, b) => sb.from('latest_board').select('*')
+        .order('board').order('rank').order('ticker').range(a, b));
+      const current = await sb.from('latest_board').select('batch_id').limit(1);
+      if (current.error) throw current.error;
+      const id = current.data?.[0]?.batch_id;
+      if ((!rows.length && !current.data?.length) ||
+          (rows.length && rows.every((r) => r.batch_id === id))) return rows;
+    }
+    throw new Error('榜單正在更新，請稍後重新載入');
+  }
+
+  async function start(force = false) {
+    if (state.loading || (state.started && !force)) return;
+    state.loading = true;
+    state.reportRequest++;
+    state.repChart?.destroy(); state.repChart = null;
     state.started = true;
+    $('#reload').disabled = true;
+    $('#reload').hidden = false;
     $('#login').hidden = true;
     hideNotice();
     if (CFG.REQUIRE_LOGIN) $('#signout').hidden = false;
     $('#app').hidden = false;
+    closeDrawer();
+    state.stockTable?.destroy(); state.raiseTable?.destroy(); state.twTable?.destroy();
+    state.stockTable = state.raiseTable = state.twTable = null;
+    state.stockReady = state.raiseReady = state.twReady = false;
+    state.usQ = null;
     $('#tbl-stock').innerHTML = '<p class="muted" style="padding:28px">載入中…</p>';
 
     try {
       const sb = state.sb;
-      const [rows, raises, runRes] = await Promise.all([
-        pageAll((a, b) => sb.from('latest_board').select('*').order('rank').range(a, b)),
-        pageAll((a, b) => sb.from('latest_fundraises').select('*').order('filed_at', { ascending: false }).range(a, b)),
-        sb.from('crawl_runs').select('status,started_at,finished_at,as_of,errors').order('started_at', { ascending: false }).limit(1),
+      const results = await Promise.allSettled([
+        loadBoard(sb),
+        pageAll((a, b) => sb.from('latest_fundraises').select('*').order('filed_at', { ascending: false }).order('cik').range(a, b)),
+        (async () => {
+          const r = await sb.from('crawl_runs').select('status,started_at,finished_at,as_of,errors,stats')
+            .order('started_at', { ascending: false }).order('id', { ascending: false }).limit(30);
+          if (r.error) throw r.error;
+          return r.data || [];
+        })(),
       ]);
-      state.rows = rows;
+      state.loadErrors = {};
+      const [rows, raises, runs] = results.map((r, i) => {
+        if (r.status === 'fulfilled') return r.value;
+        state.loadErrors[['股票榜單', '募資資料', '執行狀態'][i]] = r.reason?.message || String(r.reason);
+        return [];
+      });
+      state.rows = rows; state.raises = raises; state.runs = runs; state.run = runs[0] || null;
       try {
         const sm = await pageAll((a, b) => sb.from('smart_money').select('*').gt('score', 0).range(a, b));
         const by = new Map(sm.map((x) => [x.ticker, x]));
         rows.forEach((r) => { r.smart = by.get(r.ticker) || null; r.smart_score = r.smart ? r.smart.score : 0; });
-      } catch (e) { rows.forEach((r) => { r.smart = null; r.smart_score = 0; }); }
+      } catch (e) {
+        state.loadErrors['大戶動向'] = e?.message || String(e);
+        rows.forEach((r) => { r.smart = null; r.smart_score = 0; });
+      }
       try {
         const w = await pageAll((a, b) => sb.from('user_watch').select('ticker,note').range(a, b));
         state.watch = new Map(w.map((x) => [x.ticker, x.note || '']));
-      } catch (e) { state.watch = new Map(); }
-      state.raises = raises;
+      } catch (e) { state.watch = new Map(); state.loadErrors['自選清單'] = e?.message || String(e); }
       try {
         state.tw = await pageAll((a, b) => sb.from('tw_latest_board').select('*').order('rank').range(a, b));
-      } catch (e) { state.tw = []; }
-      state.run = runRes.data?.[0] || null;
+      } catch (e) { state.tw = []; state.loadErrors['台股榜單'] = e?.message || String(e); }
     } catch (e) {
       state.started = false;
       $('#app').hidden = true;
       showError(e);
       return;
+    } finally {
+      state.loading = false;
+      $('#reload').disabled = false;
     }
 
     renderStatus();
     renderQuality();
     fillSectors();
     fillPortals();
-    wireControls();
     renderViews();
+    if (!state.controlsWired) { wireControls(); state.controlsWired = true; }
+    const sectors = [...new Set((state.tw || []).map((r) => r.sector).filter(Boolean))].sort();
+    $('#t-sector').innerHTML = '<option value="">全部產業</option>' + sectors.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    if (!sectors.includes(state.tsector)) state.tsector = '';
+    syncFilters();
     buildStockTable();
-    setTab('main');
+    setTab(state.tab);
   }
 
   function renderStatus() {
     const pill = $('#status');
     const banner = $('#banner');
-    const asOf = state.rows[0]?.as_of;
-    const run = state.run;
-    const msgs = [];
+    const tw = isTaiwan();
+    const rows = tw ? state.tw || [] : state.rows;
+    const asOf = rows[0]?.as_of;
+    const run = tw ? state.runs.find((r) => r.stats?.tw || r.errors?.tw) : state.run;
+    const runStatus = tw ? run?.stats?.tw?.status || (run?.errors?.tw ? 'failed' : null) : run?.status;
+    const msgs = Object.entries(state.loadErrors).filter(([k]) => tw
+      ? ['台股榜單', '執行狀態'].includes(k) : k !== '台股榜單')
+      .map(([k, v]) => `${k}載入失敗：${v}。可按「重新載入」重試。`);
     let level = '';
 
-    if (!asOf) {
-      msgs.push('還沒有分數資料。到 GitHub 的 Actions 頁籤，選 daily-crawl，按 Run workflow，勾選 full_refresh，第一次大約需要 15 到 40 分鐘。');
+    if (!asOf && !state.loadErrors[tw ? '台股榜單' : '股票榜單']) {
+      msgs.push(`尚未有${tw ? '台股' : '完整發布的美股'}榜單。請執行一次資料更新；首次載入所需時間依價格來源與股票數量而定。`);
       level = 'warn';
-    } else {
+    } else if (asOf) {
       const age = daysSince(asOf);
-      const rel = run?.finished_at ? new Intl.RelativeTimeFormat('zh-TW', { numeric: 'auto' }).format(-Math.round((Date.now() - new Date(run.finished_at)) / 3600000), 'hour') : '';
-      $('#status-text').textContent = `資料日期 ${asOf}${rel ? '，' + rel + '更新' : ''}`;
+      const published = rows[0]?.published_at;
+      const rel = published ? new Intl.RelativeTimeFormat('zh-TW', { numeric: 'auto' }).format(-Math.round((Date.now() - new Date(published)) / 3600000), 'hour') : '';
+      $('#status-text').textContent = `${tw ? '台股' : '美股'}資料日期 ${asOf}${rel ? '，' + rel + '更新' : ''}`;
       const stale = age > (CFG.STALE_AFTER_DAYS ?? 4);
       pill.className = 'pill' + (stale ? (age > 2 * (CFG.STALE_AFTER_DAYS ?? 4) ? ' bad' : ' warn') : '');
       pill.hidden = false;
       if (stale) { msgs.push(`資料已經 ${age} 天沒有更新。到 GitHub 的 Actions 頁籤看 daily-crawl 有沒有失敗。`); level = age > 2 * (CFG.STALE_AFTER_DAYS ?? 4) ? 'bad' : 'warn'; }
     }
-    if (run && (run.status === 'partial' || run.status === 'failed')) {
-      const errs = run.errors ? Object.entries(run.errors).map(([k, v]) => `${k}：${v}`).join('；') : '';
-      msgs.push(`最近一次執行${run.status === 'failed' ? '失敗' : '只有部分成功'}。${errs}`);
-      level = run.status === 'failed' ? 'bad' : level || 'warn';
+    if (!tw && rows.some((r) => r.scoring_version === 'legacy-unverified')) {
+      msgs.push('目前顯示舊版美股榜單，尚未通過新版完整批次驗證；首批資料重建成功後會自動切換。請以來源日期與缺漏提示判讀。');
+      level = level || 'warn';
+    }
+    if (run && (runStatus === 'partial' || runStatus === 'failed')) {
+      const errs = run.errors ? Object.entries(run.errors).filter(([k]) => !tw || k === 'tw').map(([k, v]) => `${k}：${v}`).join('；') : '';
+      msgs.push(`最近一次${tw ? '台股' : ''}執行${runStatus === 'failed' ? '失敗' : '只有部分成功'}。${errs}`);
+      level = runStatus === 'failed' ? 'bad' : level || 'warn';
     }
     if (msgs.length) {
       banner.className = 'banner' + (level === 'bad' ? ' bad' : '');
       banner.innerHTML = msgs.map(esc).join('<br>');
       banner.hidden = false;
     } else banner.hidden = true;
+    if (!asOf) pill.hidden = true;
+    const publicRun = state.runs.find((r) => r.stats?.public);
+    const formRun = state.runs.find((r) => r.stats?.formc);
+    const health = publicRun?.stats?.public || {};
+    const overdue = state.rows.filter((r) => (r.flags || []).includes('stale_fundamentals')).length;
+    const dated = state.rows.map((r) => r.fundamentals_fetched_at
+      ? Math.max(0, Math.floor((Date.now() - new Date(r.fundamentals_fetched_at)) / 86400000))
+      : r.fundamentals_age_days).filter(isNum);
+    const age = dated.length ? `最久 ${Math.max(...dated)} 天前` : '日期未知';
+    const hnUnknown = state.rows.filter((r) => !isNum(r.hn_mentions)).length;
+    const statusText = (s) => ({ ok: '成功', partial: '部分成功', failed: '失敗' }[s] || '尚無紀錄');
+    const sources = tw ? [
+      ['台股行情', `證交所／櫃買中心 · ${asOf || '尚無榜單'}`],
+      ['營收與法人', '證交所／櫃買中心公開資料；各項資料可能有不同更新時間'],
+    ] : [
+      ['價格', asOf ? `${state.rows[0].price_source || '來源未記錄'} · ${asOf}` : '尚無完整榜單'],
+      ['基本面', `${age} · ${overdue} 檔待更新${health.fundamentals?.expired ? ` · ${health.fundamentals.expired} 檔過期排除` : ''}`],
+      ['Hacker News', `${hnUnknown} 檔無資料${health.attention?.failed ? ` · ${health.attention.failed} 檔查詢失敗` : ''}`],
+      ['SEC 募資', `${statusText(formRun?.stats?.formc?.status)}${formRun?.finished_at ? ' · ' + new Date(formRun.finished_at).toLocaleString('zh-TW') : ''}`],
+    ];
+    $('#source-status').innerHTML = sources.map(([name, value]) => `<div><b>${esc(name)}</b><span>${esc(value)}</span></div>`).join('');
   }
 
   function renderQuality() {
     const rows = state.rows;
     const n = rows.length;
-    if (!n) return;
-    const noGm = rows.filter((r) => !isNum(r.gross_margin)).length;
+    if (!n) { $('#quality').textContent = ''; return; }
+    const noGm = rows.filter((r) => !isNum(r.sector === '金融與保險' ? r.profit_margin : r.gross_margin)).length;
     const thin = rows.filter((r) => (r.flags || []).includes('data_thin')).length;
-    $('#quality').textContent = `共評分 ${nf(n)} 檔；${nf(noGm)} 檔（${Math.round((noGm / n) * 100)}%）沒有毛利率資料，${nf(thin)} 檔被標為資料不足，這些分數可信度較低。擁擠度目前只含 Hacker News 與成交額，沒有分析師與法人資料。`;
+    $('#quality').textContent = `共評分 ${nf(n)} 檔；${nf(noGm)} 檔（${Math.round((noGm / n) * 100)}%）缺少評分所需利潤率（金融業採淨利率，其餘採毛利率），${nf(thin)} 檔被標為資料不足，這些分數可信度較低。擁擠度目前只含 Hacker News 與成交額，沒有分析師與法人資料。`;
   }
 
   function fillPortals() {
     const sel = $('#r-portal');
     const portals = [...new Set(state.raises.map((r) => r.portal).filter(Boolean))].sort();
-    sel.insertAdjacentHTML('beforeend', portals.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join(''));
+    sel.innerHTML = '<option value="">全部平台</option>' + portals.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    sel.value = state.portal;
   }
 
   // ── quick views (built-in + saved in this browser) ──────────────────────
@@ -274,7 +406,7 @@
     box.innerHTML =
       presets.map((p) => btn(p.id, p.label)).join('') +
       state.saved.map((v, i) => btn('s' + i, v.label, `<button type="button" class="vdel" data-del="${i}" aria-label="刪除視圖 ${esc(v.label)}">✕</button>`)).join('') +
-      '<input id="view-name" type="text" maxlength="20" placeholder="視圖名稱" aria-label="視圖名稱"><button type="button" class="vbtn" id="view-save">儲存目前條件</button>' +
+      '<div class="save-view"><label for="view-name">條件組名稱</label><input id="view-name" type="text" maxlength="20" placeholder="例如：穩定成長股" aria-describedby="view-help"><button type="button" class="vbtn" id="view-save">儲存目前條件</button><span id="view-help" class="vnote">替目前篩選命名，儲存在此瀏覽器，下次一鍵套用。</span></div><span id="view-msg" class="vnote" role="status"></span>' +
       (extras.length ? `<span class="vnote">額外條件：${esc(extras.join('、'))}</span>` : '');
   }
 
@@ -295,25 +427,38 @@
         renderViews();
       } else if (t.id === 'view-save') {
         const name = $('#view-name').value.trim();
-        if (!name) { $('#view-name').focus(); return; }
+        if (!name) { $('#view-msg').textContent = '請先輸入條件組名稱。'; $('#view-name').focus(); return; }
         const list = store.get('tc_views') || [];
         list.push({ label: name, f: { q: state.q, sector: state.sector, minScore: state.minScore, hideRisk: state.hideRisk, maxCap: state.maxCap, minStreak: state.minStreak, onlyNew: state.onlyNew, smartOnly: state.smartOnly, watchOnly: state.watchOnly } });
-        store.set('tc_views', list.slice(-8));
+        if (!store.set('tc_views', list.slice(-8))) {
+          $('#view-msg').textContent = '儲存失敗：目前瀏覽器無法儲存條件，請檢查儲存空間或隱私設定後重試。';
+          return;
+        }
         state.view = 's' + (Math.min(list.length, 8) - 1);
         renderViews();
+        saveFilters();
+        $('#view-msg').textContent = `已儲存「${name}」，點同名按鈕即可套用。`;
       }
     });
   }
 
   function fillSectors() {
     const sel = $('#f-sector');
+    sel.innerHTML = '<option value="">全部產業</option>';
     const sectors = [...new Set(state.rows.map((r) => r.sector).filter(Boolean))].sort();
-    if (!sectors.length) sel.hidden = true;  // SEC data has no sector: hide an empty filter
+    sel.hidden = !sectors.length;
     sel.insertAdjacentHTML('beforeend', sectors.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join(''));
+    if (!sectors.includes(state.sector)) state.sector = '';
   }
 
   // ── controls ────────────────────────────────────────────────────────────
   function wireControls() {
+    $('#filter-toggle').addEventListener('click', () => {
+      const open = $('#filter-toggle').getAttribute('aria-expanded') !== 'true';
+      $('#filter-toggle').setAttribute('aria-expanded', String(open));
+      $('#app').classList.toggle('filters-open', open);
+      renderFilterToggle();
+    });
     const tabs = $$('#tabs-us button');
     tabs.forEach((b, i) => {
       b.addEventListener('click', () => setTab(b.dataset.tab));
@@ -325,8 +470,6 @@
     });
     $$('#market button').forEach((b) => b.addEventListener('click', () => setMarket(b.dataset.market)));
     $$('#tabs-tw button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
-    const tsec = [...new Set((state.tw || []).map((r) => r.sector).filter(Boolean))].sort();
-    $('#t-sector').insertAdjacentHTML('beforeend', tsec.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join(''));
     $('#t-q').addEventListener('input', (e) => { state.tq = e.target.value; applyTwFilters(); });
     $('#t-sector').addEventListener('change', (e) => { state.tsector = e.target.value; applyTwFilters(); });
     $('#t-min').addEventListener('input', (e) => { state.tmin = +e.target.value; $('#t-min-out').textContent = e.target.value; applyTwFilters(); });
@@ -360,14 +503,26 @@
     $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === m)));
     $('#tabs-us').hidden = m === 'tw';
     $('#tabs-tw').hidden = m !== 'tw';
-    if (m === 'tw') { if (!['tw', 'twwatch', 'twheat', 'twreport'].includes(state.tab)) state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
+    if (m === 'tw') { if (!['tw', 'twwatch', 'twheat', 'twreport', 'twresearch'].includes(state.tab)) state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
   }
 
   function setTab(tab) {
     state.tab = tab;
+    state.reportRequest++;
+    state.repChart?.destroy(); state.repChart = null;
+    const market = isTaiwan() ? 'tw' : 'us';
+    state.market = market;
+    $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === market)));
+    $('#tabs-us').hidden = market === 'tw';
+    $('#tabs-tw').hidden = market !== 'tw';
+    saveFilters();
+    renderStatus();
     $$('#tabs-us button, #tabs-tw button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-    if (['tw', 'twwatch', 'twheat', 'twreport'].includes(tab)) state.twTab = tab;
-    const rep = ['report', 'heat', 'twreport', 'twheat'].includes(tab);
+    if (['tw', 'twwatch', 'twheat', 'twreport', 'twresearch'].includes(tab)) state.twTab = tab;
+    const research = tab === 'research' || tab === 'twresearch';
+    $('#research').hidden = !research;
+    const rep = research || ['report', 'heat', 'twreport', 'twheat'].includes(tab);
+    $('#filter-toggle').hidden = rep;
     const raise = tab === 'raise';
     const tw = tab === 'tw' || tab === 'twwatch';
     $('#report').hidden = !(tab === 'report' || tab === 'twreport');
@@ -376,6 +531,14 @@
     $('#count').hidden = rep;
     if (rep) {
       ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise', '#legend-tw', '#tbl-tw', '#filters-tw'].forEach((q) => { $(q).hidden = true; });
+      if (research) {
+        const twMarket = tab === 'twresearch';
+        state.refreshResearch = Research.renderRadar($('#research'), twMarket ? state.tw || [] : state.rows, twMarket ? 'tw' : 'us', d => {
+          (twMarket ? openTwStock : openStock)(d);
+          const editor = $('.research-editor'); if (editor) editor.open = true;
+        }, state.loadErrors[twMarket ? '台股榜單' : '股票榜單'], state.sb);
+        return;
+      }
       if (tab === 'report') loadReport(false); else if (tab === 'twreport') loadReport(true); else renderHeat(tab === 'twheat');
       return;
     }
@@ -388,7 +551,7 @@
       if (state.usQ == null) state.usQ = $('#quality').textContent;
       $('#quality').hidden = false;
       const n = (state.tw || []).length;
-      $('#quality').textContent = `共評分 ${nf(n)} 檔（上市＋上櫃）。台股沒有毛利率與 Hacker News 資料，驗證與擁擠度是簡化版；資料來自證交所與櫃買中心。`;
+      $('#quality').textContent = `共評分 ${nf(n)} 檔（上市＋上櫃）。驗證採實際連續月營收年增，歷史不足另行標記；台股缺毛利率與現金流趨勢。資料來自證交所與櫃買中心。`;
       buildTwTable();
       return;
     }
@@ -433,12 +596,15 @@
     const bn = tw ? '加權指數' : 'SPY';
     const key = tw ? 'tw' : 'us';
     const box = $('#report-body');
+    const request = ++state.reportRequest;
+    box.innerHTML = '<p class="muted" role="status">載入中…</p>';
     let rows = [];
     try {
       rows = await pageAll((a, b) => state.sb.from(tw ? 'tw_report_card' : 'report_card').select('*').order('as_of', { ascending: false }).range(a, b));
     } catch (e) { rows = null; }
+    if (request !== state.reportRequest) return;
     state.reportLoaded[key] = true;
-    if (rows === null) { box.innerHTML = '<p class="muted">成績單的資料表還不存在，請先在 Supabase 執行最新的 schema' + (tw ? '_tw' : '') + '.sql。</p>'; return; }
+    if (rows === null) { box.innerHTML = '<p class="muted" role="status">成績單載入失敗，請按「重新載入」重試。若持續失敗，請聯絡管理員確認資料來源。</p>'; return; }
     if (!rows.length) {
       box.innerHTML = `<h3>歷史成績單</h3><p class="muted">還在累積中。每天收盤後記錄主榜前 20 名，滿 5 個與 20 個交易日後，這裡會顯示它們的平均報酬、對比 ${bn} 的超額報酬，以及打敗 ${bn} 的比例。第一筆大約要等一週。</p>`;
       return;
@@ -476,6 +642,9 @@
   const tableHeight = () => Math.max(480, window.innerHeight - 290);
 
   function applyFilters() {
+    saveFilters();
+    if (isTaiwan()) { applyTwFilters(); return; }
+    if (['report', 'heat'].includes(state.tab)) return;
     if (state.tab === 'raise') {
       if (!state.raiseReady) return;
       const q = state.rq.trim().toLowerCase();
@@ -648,6 +817,7 @@
   }
 
   function openTwStock(d) {
+    destroyCharts();
     state.current = d.ticker;
     const diff = isNum(d.score_7d) ? d.score - d.score_7d : null;
     const f = (d.flags || []).filter((x) => FLAGS[x]);
@@ -666,7 +836,8 @@
       </div>
       <div class="d-section radar-wrap"><canvas id="radar" height="220" aria-label="四個面向雷達圖"></canvas><p class="chart-note">藍色是這檔，灰色是台股主榜的中位數。冷門度是擁擠的反面。</p></div>
       ${pillar(0, '成長', d.growth, `最新單月營收年增 ${spct(d.rev_yoy)}，6 個月相對強度 ${spct(d.rs_6m)}（相對加權指數）。`, beats(d.growth))}
-      ${pillar(1, '驗證', d.validated, `單月營收年增 ${spct(d.rev_yoy)}，累計營收年增 ${spct(d.rev_cum_yoy)}。台股沒有毛利率資料，這一項是簡化版。`)}
+      ${pillar(1, '驗證', d.validated, d.scoring_version === 'tw-revenue-v3' ? `實際連續 ${nf(d.revenue_streak_months)} 個月營收年增為正；已取得 ${nf(d.revenue_months)} 個月連續歷史。近三個月合計年增 ${spct(d.rev_3m_yoy, 1)}，比前三個月${isNum(d.rev_accel) ? '變化 ' + (d.rev_accel * 100).toFixed(1) + ' 個百分點' : '尚無法比較'}。` : '舊版僅使用單月與累計年增作代理，尚不能判斷連續成長；請等待新版爬蟲更新。')}
+      <div class="d-section" id="research-card"></div>
       ${pillar(2, '進場', d.accessibility, `市值 ${twd(d.mkt_cap)}，20 日平均成交值 ${twd(d.dollar_vol)}，股價 NT$${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `只看 20 日平均成交值 ${twd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。` : '')}
       <div class="d-section"><h3>法人與內部人</h3>
@@ -683,7 +854,8 @@
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
         : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
       <div class="d-section"><h3>資料來源</h3>
-        <p class="chart-note">股價與成交值：證交所與櫃買中心每日收盤行情。營收：公開資訊觀測站的月營收（通常次月 10 日前公布）。市值是收盤價乘以發行股數。</p>
+        <p class="chart-note">股價與成交值：證交所與櫃買中心每日收盤行情。營收：公開資訊觀測站的月營收與歷史月報。歷史可能經過修正，取得日期不等於當時公告日期；不直接用於無前視偏誤回測。市值是收盤價乘以發行股數。</p>
+        <p class="chart-note">營收月份 ${esc(d.revenue_as_of?.slice(0,7) || '待更新')} · 歷史最近取得 ${esc(d.revenue_observed_at?.slice(0,10) || '未記錄')} · 評分版本 ${esc(d.scoring_version || '舊版代理指標')}</p>
       </div>
       <div class="d-section"><h3>其他數字</h3>
         <dl class="facts">
@@ -694,11 +866,14 @@
           <div><dt>產業</dt><dd>${esc(d.sector || '—')}</dd></div>
         </dl>
       </div>`;
+    Research.mountCard($('#research-card'), d, d.board?.startsWith('tw') ? 'tw' : 'us', state.sb);
     showDrawer();
     drawRadar(d);
   }
 
   function applyTwFilters() {
+    if (!isTaiwan()) return;
+    saveFilters();
     if (!state.twReady) return;
     const q = state.tq.trim().toLowerCase();
     state.twTable.setFilter((d) =>
@@ -781,6 +956,7 @@
     destroyCharts();
     setTimeout(() => { if (!dr.classList.contains('open')) $('#scrim').hidden = true; }, 240);
     state.lastFocus?.focus?.();
+    if (['research', 'twresearch'].includes(state.tab)) state.refreshResearch?.();
   }
 
   function onKey(e) {
@@ -788,7 +964,8 @@
     if (!dr.classList.contains('open')) return;
     if (e.key === 'Escape') { closeDrawer(); return; }
     if (e.key === 'Tab') {  // keep focus inside the drawer while it is open
-      const f = $$('a[href],button:not([disabled])', dr);
+      const f = $$('a[href],button,input,textarea,select,summary,[tabindex]', dr)
+        .filter((el) => !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden],[inert]') && el.getClientRects().length);
       if (!f.length) return;
       const first = f[0], last = f[f.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -813,20 +990,24 @@
     state.linkDone = true;
     const t = m[1].toUpperCase();
     let d = (state.rows || []).find((r) => r.ticker === t);
-    if (!d && /^\d/.test(t)) { // Taiwan code: switch the market first, then open it
+    if (d) { setTab(d.board === 'watch' ? 'watch' : 'main'); openStock(d); return; }
+    if (/^\d/.test(t)) {
       d = (state.tw || []).find((r) => r.ticker === t);
-      if (d) setMarket('tw');
+      if (d) { setTab(d.board === 'tw_watch' ? 'twwatch' : 'tw'); openTwStock(d); }
     }
-    if (d) openStock(d);
   }
 
   function openStock(d) {
+    destroyCharts();
     state.current = d.ticker;
     const diff = isNum(d.score_7d) ? d.score - d.score_7d : null;
     const f = (d.flags || []).filter((x) => FLAGS[x]);
     const yahoo = `https://finance.yahoo.com/quote/${encodeURIComponent(d.ticker)}`;
     const sec = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(d.ticker)}&type=10-&dateb=&owner=include&count=40`;
     const boardName = d.board === 'main' ? '主榜' : '觀察清單';
+    const financial = d.sector === '金融與保險';
+    const margin = financial ? d.profit_margin : d.gross_margin;
+    const marginLabel = financial ? '淨利率' : '毛利率';
 
     $('#drawer-body').innerHTML = `
       <div class="d-head">
@@ -843,16 +1024,17 @@
       </div>
       <div class="d-section radar-wrap"><canvas id="radar" height="220" aria-label="四個面向雷達圖"></canvas><p class="chart-note">藍色是這檔，灰色是主榜的中位數。冷門度是擁擠的反面。</p></div>
       ${pillar(0, '成長', d.growth, `營收年增 ${spct(d.rev_yoy)}，6 個月相對強度 ${spct(d.rs_6m)}（相對 SPY）。`, beats(d.growth))}
-      ${pillar(1, '驗證', d.validated, `連續 ${nf(d.rev_streak)} 季營收季增，毛利率 ${pct(d.gross_margin)}。`, isNum(d.gross_margin) ? beats(d.validated) : '這檔沒有毛利率資料，這一項是以偏低的預設值估算，可信度較低。')}
+      ${pillar(1, '驗證', d.validated, `連續 ${nf(d.rev_streak)} 季營收季增，${marginLabel} ${pct(margin)}。${financial ? '金融業以淨利率衡量獲利能力。' : ''}`, isNum(margin) ? '' : `目前缺少${marginLabel}資料，請留意資料完整度。`)}
       ${pillar(2, '進場', d.accessibility, `市值 ${usd(d.mkt_cap)}，20 日平均成交額 ${usd(d.dollar_vol)}，股價 $${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `Hacker News 近 30 天 ${isNum(d.hn_mentions) ? nf(d.hn_mentions) + ' 則' : '沒有資料'}，20 日平均成交額 ${usd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。目前沒有分析師與法人資料。` : '')}
+      <div class="d-section" id="research-card"></div>
       <div class="d-section"><h3>我的筆記</h3><div id="watch-box"></div></div>
       <div class="d-section"><h3>大戶動向</h3><div id="smart-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>風險標記</h3>${f.length
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
         : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
       <div class="d-section"><h3>分數走勢</h3><div id="chart-score" class="chart-box"><p class="chart-note">載入中…</p></div></div>
-      <div class="d-section"><h3>近半年股價</h3><div id="chart-price" class="chart-box"><p class="chart-note">載入中…</p></div></div>
+      <div class="d-section"><h3 id="price-heading">近半年股價</h3><div id="chart-price" class="chart-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>資料來源</h3>
         <p class="chart-note">營收、毛利、淨利、現金與流通股數：SEC EDGAR 的公開財報資料（以最近一次申報為準，通常比實際晚一到三個月）。股價與成交額：Massive 的收盤資料。市值是股價乘以最近申報封面上的股數，所以可能與市場報價略有差距。點上方「SEC 申報」可以對照原文。</p>
       </div>
@@ -864,13 +1046,19 @@
           <div><dt>距 52 週高點</dt><dd>${spct(d.dist_high, 1)}</dd></div>
           <div><dt>現金可撐（虧損中才有）</dt><dd>${isNum(d.runway_months) ? nf(d.runway_months, 0) + ' 個月' : '—'}</dd></div>
           <div><dt>產業</dt><dd>${esc(d.sector || '—')}</dd></div>
+          <div><dt>基本面取得日期</dt><dd>${esc(d.fundamentals_fetched_at?.slice(0, 10) || '未記錄')}</dd></div>
+          <div><dt>評分版本</dt><dd>${esc(d.scoring_version || '未記錄')}</dd></div>
         </dl>
       </div>`;
+    Research.mountCard($('#research-card'), d, d.board?.startsWith('tw') ? 'tw' : 'us', state.sb);
     showDrawer();
     drawRadar(d);
     renderWatch(d);
     loadSmart(d);
-    loadStockCharts(d.ticker);
+    loadStockCharts(d.ticker).catch((e) => {
+      if (state.current !== d.ticker) return;
+      for (const id of ['#chart-score', '#chart-price']) $(id).innerHTML = `<p class="chart-note">圖表載入失敗：${esc(e?.message || e)}</p>`;
+    });
   }
 
   function renderWatch(d) {
@@ -960,8 +1148,8 @@
   async function loadStockCharts(ticker) {
     const sb = state.sb;
     const [hist, px] = await Promise.all([
-      sb.from('scores').select('as_of,score,growth,validated,accessibility,attention').eq('ticker', ticker).order('as_of').limit(600),
-      sb.from('price_series').select('series').eq('ticker', ticker).maybeSingle(),
+      sb.from('scores').select('as_of,score,growth,validated,accessibility,attention').eq('ticker', ticker).order('as_of', { ascending: false }).limit(600),
+      sb.from('price_series').select('series,updated_at').eq('ticker', ticker).maybeSingle(),
     ]);
     if (state.current !== ticker) return;  // the user already opened something else
 
@@ -972,7 +1160,7 @@
     });
 
     const sbox = $('#chart-score');
-    const h = hist.data || [];
+    const h = [...(hist.data || [])].reverse();
     if (hist.error) sbox.innerHTML = `<p class="chart-note">${esc(hist.error.message)}</p>`;
     else if (h.length < 2) sbox.innerHTML = `<p class="chart-note">歷史資料還在累積，目前只有 ${h.length} 天。</p>`;
     else {
@@ -1001,7 +1189,9 @@
 
     const pbox = $('#chart-price');
     const series = px.data?.series;
-    if (!series || series.length < 2) pbox.innerHTML = '<p class="chart-note">沒有價格走勢。只會保存分數前 250 名的走勢。</p>';
+    if (series?.length) $('#price-heading').textContent = `近半年股價（截至 ${series[series.length - 1][0]}）`;
+    if (px.error) pbox.innerHTML = `<p class="chart-note">${esc(px.error.message)}</p>`;
+    else if (!series || series.length < 2) pbox.innerHTML = '<p class="chart-note">沒有價格走勢。只會保存分數前 250 名的走勢。</p>';
     else {
       pbox.innerHTML = '<canvas aria-label="股價走勢圖" role="img"></canvas>';
       state.charts.push(new Chart($('canvas', pbox), {
@@ -1044,6 +1234,7 @@
   }
 
   function openRaise(d) {
+    destroyCharts();
     state.current = d.accession;
     const g = growthOf(d);
     const margin = isNum(d.revenue) && d.revenue > 0 && isNum(d.net_income) ? d.net_income / d.revenue : null;

@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches-ignore: [main]
+  workflow_dispatch:
   workflow_call:
 
 permissions:
@@ -34,10 +35,14 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: crawler/requirements.txt
-      - run: pip install -r crawler/requirements.txt pytest
-      - run: node --test tests/*.test.mjs
+          cache-dependency-path: |
+            crawler/requirements.txt
+            requirements-dev.txt
+      - run: pip install -r crawler/requirements.txt -r requirements-dev.txt
       - run: python -m pytest -q
+      - run: npm install --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
       - name: Verify migration, grants and atomic claims in PostgreSQL
         env:
           PGHOST: localhost

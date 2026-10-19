@@ -25,14 +25,20 @@ MIN_DOLLAR_VOL = 300_000      # liquidity gate for the main board (and the 0-poi
 
 # ── Fetch budget ────────────────────────────────────────────────────────────
 FUNDAMENTALS_TTL_DAYS = 7
+FUNDAMENTALS_MAX_AGE_DAYS = 21
+FULL_REFRESH = os.getenv("FULL_REFRESH") == "1"
 MAX_REFRESH_PER_RUN = int(os.getenv("MAX_REFRESH_PER_RUN", "400"))
-if os.getenv("FULL_REFRESH") == "1":
+if FULL_REFRESH:
     MAX_REFRESH_PER_RUN = 5000
 REQUEST_PAUSE = 0.15           # seconds between per-company SEC calls (SEC allows 10 req/s)
-PRICE_PAUSE = 12.5             # seconds between price-API calls (free plan: 5 calls/minute)
 RATE_LIMIT_ABORT_AFTER = 15    # consecutive failures before we stop hammering the source
 PRICE_CHUNK = 150
 PRICE_SERIES_TOP_N = 250       # tickers per run that get a stored price series for the detail chart
+PRICE_SOURCE = os.getenv("PRICE_SOURCE", "massive").lower()
+PRICE_PAUSE = float(os.getenv("PRICE_PAUSE", "13"))
+PRICE_HISTORY_DAYS = 400        # enough sessions for a real 52-week high
+PRICE_MAX_AGE_DAYS = 5
+SCORING_VERSION = "2"
 
 # ── Scoring ─────────────────────────────────────────────────────────────────
 # score = 100 × geometric_mean(growth, validated, accessibility) × (1 − CROWD_WEIGHT × attention)
@@ -61,6 +67,7 @@ DILUTION_LOOKBACK_DAYS = 180
 # ── Hacker News attention ───────────────────────────────────────────────────
 HN_WINDOW_DAYS = 30
 HN_PAUSE = 0.12
+HN_CACHE_HOURS = 24
 
 # ── SEC EDGAR / Form C ──────────────────────────────────────────────────────
 FORMC_DAYS_BACK = int(os.getenv("FORMC_DAYS_BACK", "21"))

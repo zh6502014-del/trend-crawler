@@ -39,7 +39,7 @@ def test_revenue_and_shares_parsing():
             {"公司代號": "00400A", "公司名稱": "x"}]
     df = tw.parse_revenue(rows)
     assert list(df.index) == ["1101"] and abs(df.loc["1101", "rev_yoy"] - 0.0762) < 1e-9
-    assert tw.revenue_streak(0.1, 0.03) == 4 and tw.revenue_streak(0.1, -0.1) == 2 and tw.revenue_streak(np.nan, np.nan) == 0
+    assert pd.isna(df.loc['1101', 'rev_prior'])  # Never reconstruct last-year revenue from rounded growth.
     sh = tw.parse_shares([{"公司代號": "1101", "已發行普通股數或TDR原股發行股數": "7,000,000,000"},
                           {"SecuritiesCompanyCode": "1240", "Paidin.Capital.NTDollars": "464439920"}])
     assert sh["1101"] == 7e9 and sh["1240"] == 46443992
@@ -110,6 +110,8 @@ def test_run_tw_writes_tables(monkeypatch):
     monkeypatch.setattr(tw, "load_fundamentals", lambda session=None: (rev, {}, {}))
     from crawler import tw_inst
     monkeypatch.setattr(tw_inst, "enrich", lambda store, scored, hist, session=None: scored)  # no network in tests
+    from crawler import tw_revenue
+    monkeypatch.setattr(tw_revenue, "load_history", lambda *args: ({}, {"failed": [], "status": "ok"}))
     st = MemoryStore()
     stats = tw.run_tw(st)
     assert stats["scorable"] == 60
