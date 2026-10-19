@@ -1,29 +1,41 @@
 {
-  "version": "2026-10-19",
+  "version": "2026-10-19-large",
   "width": 2500,
-  "height": 843,
-  "tabHeight": 170,
+  "height": 1686,
+  "tabHeight": 320,
+  "tabAreas": [
+    {"x": 0, "y": 0, "width": 1250, "height": 320},
+    {"x": 1250, "y": 0, "width": 1250, "height": 320}
+  ],
+  "cellAreas": [
+    {"x": 0, "y": 320, "width": 833, "height": 683},
+    {"x": 833, "y": 320, "width": 833, "height": 683},
+    {"x": 1666, "y": 320, "width": 834, "height": 683},
+    {"x": 0, "y": 1003, "width": 833, "height": 683},
+    {"x": 833, "y": 1003, "width": 833, "height": 683},
+    {"x": 1666, "y": 1003, "width": 834, "height": 683}
+  ],
   "markets": {
     "us": {
       "label": "美股", "image": "richmenu.png", "alias": "trend-us",
       "cells": [
-        {"title": "今日動態", "subtitle": "追蹤分數與排名變化", "text": "美股 今日", "icon": "pulse"},
-        {"title": "主榜排名", "subtitle": "看看今天的研究名單", "text": "美股 榜單", "icon": "chart"},
-        {"title": "自選清單", "subtitle": "美股、台股一起追蹤", "text": "自選", "icon": "star"},
-        {"title": "個股解讀", "subtitle": "評分重點、風險整理", "text": "個股解讀", "icon": "spark"},
-        {"title": "我的筆記", "subtitle": "接著上次的研究", "text": "我的筆記", "icon": "note"},
-        {"title": "工具箱", "subtitle": "提醒、週報、開啟網頁", "text": "更多功能", "icon": "grid"}
+        {"title": "今日動態", "subtitle": "分數與排名變化", "text": "美股 今日", "icon": "pulse"},
+        {"title": "主榜排名", "subtitle": "今天的研究名單", "text": "美股 榜單", "icon": "chart"},
+        {"title": "自選清單", "subtitle": "追蹤關注個股", "text": "自選", "icon": "star"},
+        {"title": "個股解讀", "subtitle": "評分與風險重點", "text": "個股解讀", "icon": "spark"},
+        {"title": "我的筆記", "subtitle": "接續研究紀錄", "text": "我的筆記", "icon": "note"},
+        {"title": "工具箱", "subtitle": "提醒、網頁入口", "text": "更多功能", "icon": "grid"}
       ]
     },
     "tw": {
       "label": "台股", "image": "richmenu_tw.png", "alias": "trend-tw",
       "cells": [
-        {"title": "今日動態", "subtitle": "追蹤分數與排名變化", "text": "台股今日", "icon": "pulse"},
-        {"title": "主榜排名", "subtitle": "上市、上櫃研究名單", "text": "台股", "icon": "chart"},
-        {"title": "自選清單", "subtitle": "美股、台股一起追蹤", "text": "自選", "icon": "star"},
-        {"title": "個股解讀", "subtitle": "評分重點、風險整理", "text": "個股解讀", "icon": "spark"},
-        {"title": "我的筆記", "subtitle": "接著上次的研究", "text": "我的筆記", "icon": "note"},
-        {"title": "工具箱", "subtitle": "提醒、法人、開啟網頁", "text": "更多功能", "icon": "grid"}
+        {"title": "今日動態", "subtitle": "分數與排名變化", "text": "台股今日", "icon": "pulse"},
+        {"title": "主榜排名", "subtitle": "上市與上櫃名單", "text": "台股", "icon": "chart"},
+        {"title": "自選清單", "subtitle": "追蹤關注個股", "text": "自選", "icon": "star"},
+        {"title": "個股解讀", "subtitle": "評分與風險重點", "text": "個股解讀", "icon": "spark"},
+        {"title": "我的筆記", "subtitle": "接續研究紀錄", "text": "我的筆記", "icon": "note"},
+        {"title": "工具箱", "subtitle": "提醒、網頁入口", "text": "更多功能", "icon": "grid"}
       ]
     }
   }

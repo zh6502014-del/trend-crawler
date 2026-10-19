@@ -49,25 +49,34 @@ def icon(d, name, x, y, color):
 def draw(active, out):
     im = Image.new('RGB',(W,H),'#EFF4F1')
     d = ImageDraw.Draw(im)
-    big=font('RICHMENU_FONT_BOLD','/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',105)
-    small=font('RICHMENU_FONT_MEDIUM','/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc',47)
-    tabf=font('RICHMENU_FONT_BOLD','/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',72)
-    d.rectangle((0,0,W,TAB_H),fill=INK)
-    for i,(key,market) in enumerate(CONFIG['markets'].items()):
-        x0,x1=i*W//2+22,(i+1)*W//2-22
+    big=font('RICHMENU_FONT_BOLD','/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',120)
+    small=font('RICHMENU_FONT_MEDIUM','/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc',70)
+    tabf=font('RICHMENU_FONT_BOLD','/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',112)
+    # The visible rectangles and LINE tap targets use these exact bounds.
+    # There are no decorative card gutters that imply a smaller clickable area.
+    for (key,market),area in zip(CONFIG['markets'].items(),CONFIG['tabAreas'],strict=True):
+        x0,y0=area['x'],area['y']
+        x1,y1=x0+area['width'],y0+area['height']
         on=key==active
-        if on: d.rounded_rectangle((x0,20,x1,TAB_H-18),radius=32,fill='#D6F4E7')
-        d.text(((x0+x1)//2,TAB_H//2),market['label']+'研究',font=tabf,fill=INK if on else '#A8BFB8',anchor='mm')
-    cw,ch=W//3,(H-TAB_H)//2
-    for i,cell in enumerate(CONFIG['markets'][active]['cells']):
-        x0=(i%3)*cw+18; y0=TAB_H+(i//3)*ch+16
-        x1=(i%3+1)*cw-18; y1=TAB_H+(i//3+1)*ch-16
-        fill='#FFFFFF' if i<3 else '#E3F3EC'
-        d.rounded_rectangle((x0,y0,x1,y1),radius=28,fill=fill,outline='#CBDED4',width=2)
-        icon(d,cell['icon'],x0+85,y0+91,TEAL)
-        d.text((x0+153,y0+91),cell['title'],font=big,fill=INK,anchor='lm')
-        d.text((x0+54,y0+224),cell['subtitle'],font=small,fill=MUTED,anchor='lm')
-        d.line((x0+54,y0+165,x1-54,y0+165),fill='#C5DBD0',width=2)
+        d.rectangle((x0,y0,x1-1,y1-1),fill='#D6F4E7' if on else INK)
+        if on: d.rectangle((x0,y1-14,x1-1,y1-1),fill=TEAL)
+        d.text(((x0+x1)//2,(y0+y1)//2-8),market['label']+'研究',font=tabf,fill=INK if on else '#D6E5DF',anchor='mm')
+    for cell,area in zip(CONFIG['markets'][active]['cells'],CONFIG['cellAreas'],strict=True):
+        x0,y0=area['x'],area['y']
+        x1,y1=x0+area['width'],y0+area['height']
+        cx=(x0+x1)//2
+        d.rectangle((x0,y0,x1-1,y1-1),fill='#FFFFFF')
+        # Draw dividers inside the same rectangle used by the action bounds.
+        if x0: d.rectangle((x0,y0,x0+3,y1-1),fill='#CBDED4')
+        if y0>TAB_H: d.rectangle((x0,y0,x1-1,y0+3),fill='#CBDED4')
+        cy=y0+170
+        d.ellipse((cx-112,cy-112,cx+112,cy+112),fill='#E3F3EC')
+        glyph=Image.new('RGBA',(100,100))
+        icon(ImageDraw.Draw(glyph),cell['icon'],50,50,TEAL)
+        glyph=glyph.resize((180,180),Image.Resampling.LANCZOS)
+        im.paste(glyph,(cx-90,cy-90),glyph)
+        d.text((cx,y0+385),cell['title'],font=big,fill=INK,anchor='mm')
+        d.text((cx,y0+530),cell['subtitle'],font=small,fill=MUTED,anchor='mm')
     im.save(out,optimize=True)
     return out
 

@@ -79,3 +79,27 @@ test('checked-in PNG dimensions and complete hit regions match the menu manifest
   }
   assert.equal(menuAreas(MENU).reduce((n,a)=>n+a.bounds.width*a.bounds.height,0),MENU_W*MENU_H);
 });
+
+test('mobile touch regions have room for a fingertip and no gaps or overlapping targets',()=>{
+  const areas=menuAreas(MENU);
+  // At a narrow 360px phone width even market tabs must remain at least 44px high.
+  const scale=360/MENU_W;
+  for(const {bounds:b} of areas) {
+    assert.ok(b.width*scale>=44 && b.height*scale>=44);
+    assert.ok(Object.values(b).every(Number.isInteger));
+    assert.ok(b.x>=0 && b.y>=0 && b.x+b.width<=MENU_W && b.y+b.height<=MENU_H);
+  }
+  const hit=(x,y)=>areas.filter(({bounds:b})=>x>=b.x && x<b.x+b.width && y>=b.y && y<b.y+b.height);
+  // Probe centers and all corners: seams and right/bottom edges must select exactly one action.
+  for(const area of areas) {
+    const b=area.bounds;
+    for(const x of [b.x, b.x+Math.floor(b.width/2), b.x+b.width-1])
+      for(const y of [b.y, b.y+Math.floor(b.height/2), b.y+b.height-1])
+        assert.deepEqual(hit(x,y),[area]);
+  }
+  for(let i=0;i<areas.length;i++) for(let j=i+1;j<areas.length;j++) {
+    const a=areas[i].bounds,b=areas[j].bounds;
+    assert.ok(Math.min(a.x+a.width,b.x+b.width)<=Math.max(a.x,b.x) ||
+      Math.min(a.y+a.height,b.y+b.height)<=Math.max(a.y,b.y),'touch targets must not overlap');
+  }
+});

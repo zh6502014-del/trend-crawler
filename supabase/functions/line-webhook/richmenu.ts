@@ -4,13 +4,11 @@ export const MENU = config.markets.us.cells.map((c) => c.text);
 export const MENU_TW = config.markets.tw.cells.map((c) => c.text);
 export function menuAreas(cells) {
   const tabs = Object.values(config.markets).map((m, i) => ({
-    bounds: { x: i * MENU_W / 2, y: 0, width: MENU_W / 2, height: MENU_TAB_H },
+    bounds: { ...config.tabAreas[i] },
     action: { type: 'richmenuswitch', richMenuAliasId: m.alias, data: 'menu=' + m.alias.slice(6) },
   }));
-  const cw = Math.floor(MENU_W / 3), ch = Math.floor((MENU_H - MENU_TAB_H) / 2);
   return [...tabs, ...cells.map((text, i) => ({
-    bounds: { x: (i % 3) * cw, y: MENU_TAB_H + Math.floor(i / 3) * ch,
-      width: i % 3 === 2 ? MENU_W - 2 * cw : cw, height: i >= 3 ? MENU_H - MENU_TAB_H - ch : ch },
+    bounds: { ...config.cellAreas[i] },
     action: { type: 'message', text },
   }))];
 }
