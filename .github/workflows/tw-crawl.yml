@@ -4,7 +4,8 @@ name: tw-crawl
 # The first run back-fills ~150 trading days of prices (about 20 minutes); later runs add one day.
 on:
   schedule:
-    - cron: "40 7 * * 1-5"
+    - cron: "40 7 * * 1-5"    # 15:40 Taipei
+    - cron: "10 10 * * 1-5"   # 18:10 Taipei backup: GitHub can drop scheduled runs; skipped if 15:40 already ran
   workflow_dispatch:
     inputs:
       send_digest:
@@ -32,14 +33,23 @@ jobs:
           cache: pip
           cache-dependency-path: crawler/requirements.txt
       - run: pip install -r crawler/requirements.txt -r requirements-dev.txt
-      - run: python -m pytest -q tests/test_tw.py tests/test_research.py
+      - name: Skip the backup run if today's Taiwan board is already in
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python -m crawler.schedule_guard tw
+      - if: steps.guard.outputs.skip != 'true'
+        run: python -m pytest -q tests/test_tw.py tests/test_research.py tests/test_schedule_guard.py
       - name: Run Taiwan crawler
+        if: steps.guard.outputs.skip != 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python -m crawler.tw
       - name: Send Taiwan digest after a successful crawl
-        if: github.event_name == 'schedule' || inputs.send_digest
+        if: steps.guard.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.send_digest)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
