@@ -306,6 +306,10 @@
       pill.hidden = false;
       if (stale) { msgs.push(`資料已經 ${age} 天沒有更新。到 GitHub 的 Actions 頁籤看 daily-crawl 有沒有失敗。`); level = age > 2 * (CFG.STALE_AFTER_DAYS ?? 4) ? 'bad' : 'warn'; }
     }
+    if (!tw && rows.some((r) => r.scoring_version === 'legacy-unverified')) {
+      msgs.push('目前顯示舊版美股榜單，尚未通過新版完整批次驗證；首批資料重建成功後會自動切換。請以來源日期與缺漏提示判讀。');
+      level = level || 'warn';
+    }
     if (run && (runStatus === 'partial' || runStatus === 'failed')) {
       const errs = run.errors ? Object.entries(run.errors).filter(([k]) => !tw || k === 'tw').map(([k, v]) => `${k}：${v}`).join('；') : '';
       msgs.push(`最近一次${tw ? '台股' : ''}執行${runStatus === 'failed' ? '失敗' : '只有部分成功'}。${errs}`);

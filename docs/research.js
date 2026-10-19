@@ -17,6 +17,7 @@
     if (!num(d.rs_6m)) gaps.push('缺相對股價表現');
     if (dateAge(d.as_of, now) > 7 || dateAge(d.as_of, now) < 0) gaps.push('行情日期缺漏或待更新');
     if ((d.flags || []).includes('data_thin')) gaps.push('財報資料不足');
+    if (d.scoring_version === 'legacy-unverified') gaps.push('舊版榜單尚未完成批次驗證');
     if ((d.flags || []).includes('stale_fundamentals') || (num(d.fundamentals_age_days) && d.fundamentals_age_days > 7)
       || (market === 'us' && d.fundamentals_fetched_at && dateAge(d.fundamentals_fetched_at.slice(0,10),now) > 7)) gaps.push('基本面待更新');
     if (market === 'us' && !d.fundamentals_fetched_at) gaps.push('基本面取得日期未記錄');

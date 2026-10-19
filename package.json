@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.cjs tests/*.test.mjs",
-    "test:sql": "node --test tests/publication.test.cjs tests/research_sql.test.cjs",
+    "test:sql": "node --test tests/publication.test.cjs tests/research_sql.test.cjs tests/cutover.test.cjs",
     "test:ui": "node --test tests/dashboard.test.cjs tests/usability.test.cjs"
   },
   "devDependencies": {

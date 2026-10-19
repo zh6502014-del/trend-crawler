@@ -286,6 +286,19 @@ task('I36','雷達依今天的日期判斷基本面過期','已超過 7 天的�
   assert.ok(await p.locator('[data-research-ticker=FINB]').isVisible());
 });
 
+task('I37','首次重建期間標示舊版榜單','過渡資料維持可讀，但不能進入優先研究',[],{},async(p)=>{
+  await p.evaluate(()=>{
+    __data.latest_board.forEach(r=>{r.batch_id=null;r.scoring_version='legacy-unverified';r.published_at=null;});
+  });
+  await p.locator('#reload').click();await p.waitForFunction(()=>!document.querySelector('#reload').disabled);
+  assert.ok(await count(p)>0);
+  assert.match(await text(p,'#banner'),/舊版美股榜單.*尚未通過.*完整批次/);
+  await p.locator('[data-tab=research]').click();
+  assert.equal(await p.locator('[data-research-ticker]').count(),0);
+  await p.locator('[data-category=incomplete]').click();
+  assert.ok(await p.locator('[data-research-ticker=FINB]').isVisible());
+});
+
 let browser;
 const assets = new Map();
 before(async () => {
