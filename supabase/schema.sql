@@ -207,6 +207,30 @@ grant select on public.report_card to authenticated;
 grant all on public.report_card to service_role;
 
 -- ── Personal watchlist + notes (each signed-in user sees only their own rows) ──
+-- Private research cards. Distinct from user_watch; existing notes are untouched.
+create table if not exists public.research_cards (
+  user_id uuid not null default auth.uid(),
+  market text not null check (market in ('us', 'tw')),
+  ticker text not null check (length(ticker) between 1 and 30),
+  thesis text not null default '' check (length(thesis) <= 4000),
+  moat text not null default '' check (length(moat) <= 4000),
+  variant text not null default '' check (length(variant) <= 4000),
+  evidence text not null default '' check (length(evidence) <= 8000),
+  counter_evidence text not null default '' check (length(counter_evidence) <= 8000),
+  invalidation text not null default '' check (length(invalidation) <= 4000),
+  next_step text not null default '' check (length(next_step) <= 4000),
+  review_on date,
+  status text not null default 'researching' check (status in ('researching', 'watching', 'rejected')),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, market, ticker)
+);
+alter table public.research_cards enable row level security;
+drop policy if exists own_rows on public.research_cards;
+create policy own_rows on public.research_cards for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+revoke all on public.research_cards from anon;
+grant select, insert, update, delete on public.research_cards to authenticated;
+
 create table if not exists public.user_watch (user_id uuid not null default auth.uid(), ticker text not null, note text default '', updated_at timestamptz default now(), primary key (user_id, ticker));
 alter table public.user_watch enable row level security;
 drop policy if exists own_rows on public.user_watch;

@@ -257,20 +257,11 @@ def parse_revenue(rows: list[dict], exchange: str = "TWSE") -> pd.DataFrame:
         out[code] = {
             "name": _field(r, "公司名稱"), "exchange": exchange, "sector": _field(r, "產業別"), "ym": _field(r, "資料年月"),
             "rev_month": _num(_field(r, "營業收入-當月營收")),
+            "rev_prior": _num(_field(r, "營業收入-去年當月營收")),
             "rev_yoy": yoy / 100 if yoy is not None else np.nan,
             "rev_cum_yoy": cum / 100 if cum is not None else np.nan,
         }
     return pd.DataFrame.from_dict(out, orient="index")
-
-
-def revenue_streak(yoy, cum_yoy):
-    """Persistence proxy 0-4 until monthly history accumulates: this month and year-to-date both growing."""
-    s = 0
-    if pd.notna(yoy) and yoy > 0:
-        s += 2
-    if pd.notna(cum_yoy) and cum_yoy > 0:
-        s += 2
-    return s
 
 
 def parse_shares(rows: list[dict]) -> dict[str, float]:
@@ -312,8 +303,10 @@ def build_universe(px: pd.DataFrame, revdf: pd.DataFrame, shares: dict) -> pd.Da
     sh = sh.fillna(pd.to_numeric(df["shares_issued"], errors="coerce"))
     df["shares_out"] = sh
     df["mkt_cap"] = df["price"] * sh
-    df["rev_streak"] = [revenue_streak(y, c) for y, c in zip(df["rev_yoy"], df["rev_cum_yoy"])]
-    df["quarters"] = 4
+    # The shared score caps persistence at four observations. These are actual
+    # consecutive YoY-growing MONTHS, never synthetic quarters or YTD proxies.
+    df["rev_streak"] = df.get("revenue_streak_months", np.nan)
+    df["quarters"] = np.nan
     df["hn_mentions"] = np.nan
     df["gross_margin"] = np.nan
     return df.dropna(subset=["mkt_cap", "dollar_vol", "rev_yoy", "rs_6m"])
@@ -330,6 +323,11 @@ def compute_tw_scores(df: pd.DataFrame, max_main: int | None = None) -> pd.DataF
             & (d["price"] >= cfg.MIN_PRICE)
         )
     d["flags"] = d["flags"].map(lambda f: [x for x in f if x != "data_thin"])
+    for t in d.index:
+        status = d.loc[t].get("revenue_history_status")
+        if status != "complete":
+            d.at[t, "flags"] = [*d.at[t, "flags"], "stale_revenue" if status == "stale" else "revenue_history_short"]
+            main.loc[t] = False
     if main.sum() > max_main:
         main = main & (d["score"].where(main).rank(ascending=False, method="first") <= max_main)
     d["board"] = np.where(main, "tw_main", "tw_watch")
@@ -340,10 +338,11 @@ def compute_tw_scores(df: pd.DataFrame, max_main: int | None = None) -> pd.DataF
 def run_tw(store, today: dt.date | None = None) -> dict:
     stats: dict = {}
     try:  # fail fast: do not spend 30 minutes fetching prices if the tables are not there
-        for t in ("tw_price_days", "tw_scores", "tw_signals", "tw_entities"):
+        for t in ("tw_price_days", "tw_scores", "tw_signals", "tw_entities", "tw_revenue_months"):
             store.select(t, {"select": "*", "limit": "1"})
+        store.select("tw_signals", {"select": "rev_3m_yoy,scoring_version", "limit": "1"})
     except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"Taiwan tables are missing or unreadable ({str(e)[:120]}). Run supabase/schema_tw.sql in the Supabase SQL Editor first.") from e
+        raise RuntimeError(f"Taiwan research schema is missing or unreadable ({str(e)[:120]}). Run schema_tw.sql and migrations/20261018_research_radar.sql first.") from e
     hist = load_prices(store, today)
     if len(hist) < 60:
         raise RuntimeError(f"Only {len(hist)} Taiwan trading days of prices so far; need ≥60. Run again (it keeps what it fetched).")
@@ -351,6 +350,9 @@ def run_tw(store, today: dt.date | None = None) -> dict:
     as_of = px.attrs["as_of"]
     stats.update(priced=len(px), as_of=as_of.isoformat(), days=len(hist))
     revdf, shares, _ = load_fundamentals()
+    from . import tw_revenue
+    revenue_history, stats["revenue_history"] = tw_revenue.load_history(store, revdf, today)
+    revdf = tw_revenue.enrich(revdf, revenue_history, today)
     df = build_universe(px, revdf, shares)
     stats["scorable"] = len(df)
     if df.empty:
@@ -365,7 +367,9 @@ def run_tw(store, today: dt.date | None = None) -> dict:
          "exchange": r.get("exchange"), "updated_at": now}
         for t, r in scored.iterrows()], "ticker")
     cols = ["price", "mkt_cap", "dollar_vol", "ret_1m", "ret_3m", "ret_6m", "rs_6m", "dist_high", "rev_yoy", "rev_streak", "shares_out"]
+    cols += list(tw_revenue.METRICS)
     store.upsert("tw_signals", [{"ticker": t, "as_of": as_of, "ym": r.get("ym"), "rev_cum_yoy": r.get("rev_cum_yoy"),
+                                 "scoring_version": "tw-revenue-v3",
                                  **{c: (int(r[c]) if c == "rev_streak" and pd.notna(r[c]) else r.get(c)) for c in cols},
                                  **{c: r.get(c) for c in INST_COLS if c in scored.columns}}
                                 for t, r in scored.iterrows()], "ticker,as_of")
@@ -391,7 +395,7 @@ def main() -> int:
     try:
         stats = run_tw(Supabase())
         print(json.dumps(stats, ensure_ascii=False))
-        return 0
+        return 1 if stats.get("revenue_history", {}).get("failed") else 0
     except Exception:  # noqa: BLE001
         traceback.print_exc()
         return 1

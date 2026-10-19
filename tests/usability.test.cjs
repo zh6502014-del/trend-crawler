@@ -154,6 +154,109 @@ task('U24','瀏覽器拒絕儲存條件時提供重試提示','儲存失敗不�
   assert.equal(await p.locator('[data-view=s0]').count(), 0);
 });
 
+
+async function editor(p,ticker='ROBT') {
+  await stock(p,ticker);
+  await p.locator('.research-editor summary').click();
+  await p.locator('#rc-thesis').waitFor();
+}
+task('R25','雷達將已知風險與資料缺漏獨立列出','低分有證據仍能優先研究；缺漏與風險不可被總分掩蓋',[],{},async(p)=>{
+  await p.evaluate(()=>{
+    __data.latest_board[0].rs_6m=-.1;__data.latest_board[0].score=1;
+    __data.latest_board[1].rs_6m=-.1;__data.latest_board[1].flags=['short_runway'];
+    __data.latest_board[3].rs_6m=-.1;__data.latest_board[3].flags=['stale_fundamentals'];
+  });
+  await p.locator('#reload').click();await p.waitForFunction(()=>!document.querySelector('#reload').disabled);
+  await p.locator('[data-tab=research]').click();
+  assert.match(await text(p,'#research'),/FINB/);
+  assert.equal(await p.locator('[data-research-ticker=ROBT]').count(),0);
+  await p.locator('[data-category=risk]').click();assert.ok(await p.locator('[data-research-ticker=ROBT]').isVisible());
+  await p.locator('[data-category=incomplete]').click();assert.ok(await p.locator('[data-research-ticker=CLOUD]').isVisible());
+});
+task('R26','研究卡保存證據、反證、日期與原筆記','重新整理後研究卡保留，原筆記不變',[],{},async(p)=>{
+  await editor(p);await p.locator('#rc-thesis').fill('由標準零件轉為高附加價值產品');
+  await p.locator('#rc-evidence').fill('年報 2026-10-01 https://example.com/report');
+  await p.locator('#rc-counter_evidence').fill('<img src=x onerror=alert(1)> 客戶集中度偏高');
+  await p.locator('#rc-invalidation').fill('連續兩季毛利下降');
+  await p.locator('#rc-review_on').fill('2026-10-17');
+  await p.locator('.research-form button[type=submit]').click();
+  await p.waitForFunction(()=>document.querySelector('.research-save-status').textContent==='已儲存研究卡');
+  await reload(p);await editor(p);
+  assert.equal(await p.locator('#rc-thesis').inputValue(),'由標準零件轉為高附加價值產品');
+  assert.match(await p.locator('#rc-counter_evidence').inputValue(),/<img/);
+  assert.equal(await p.locator('.research-form img').count(),0);
+  assert.match(await text(p,'.research-due'),/已到驗證日期/);
+  assert.equal(await p.locator('#w-note').inputValue(),'模擬筆記');
+});
+task('R27','儲存失敗仍保留草稿並可重試','不誤報成功；切換詳情仍能回到草稿',[],{},async(p)=>{
+  await editor(p);await p.locator('#rc-thesis').fill('尚待驗證的論點');
+  await p.evaluate(()=>__errors.push('research_cards'));
+  await p.locator('.research-form button[type=submit]').click();
+  await p.waitForFunction(()=>document.querySelector('.research-save-status').textContent.includes('儲存失敗'));
+  await p.evaluate(()=>__errors=[]);await p.keyboard.press('Escape');
+  await editor(p,'FINB');assert.equal(await p.locator('#rc-thesis').inputValue(),'');await p.keyboard.press('Escape');
+  await editor(p);assert.equal(await p.locator('#rc-thesis').inputValue(),'尚待驗證的論點');
+  await p.locator('.research-form button[type=submit]').click();
+  await p.waitForFunction(()=>document.querySelector('.research-save-status').textContent==='已儲存研究卡');
+});
+task('R28','台股研究卡以獨立市場儲存','台股研究卡可保存且缺歷史時不顯示連續成長',[],{},async(p)=>{
+  await p.locator('[data-market=tw]').click();await p.locator('[data-tab=twresearch]').click();
+  assert.equal(await p.locator('[data-category=priority]').getAttribute('aria-pressed'),'true');
+  assert.equal(await p.locator('.research-candidate').count(),0);
+  await p.locator('[data-category=incomplete]').click();await p.locator('[data-research-ticker="2330"]').click();
+  await p.locator('#rc-thesis').waitFor();await p.locator('#rc-thesis').fill('台股研究');
+  await p.locator('.research-form button[type=submit]').click();
+  await p.waitForFunction(()=>document.querySelector('.research-save-status').textContent==='已儲存研究卡');
+  assert.equal(await p.evaluate(()=>__data.research_cards[0].market),'tw');
+});
+task('R29','研究卡資料表不可用時仍能看榜單','載入錯誤可重試，不顯示空卡冒充已載入',[],{errors:['research_cards']},async(p)=>{
+  await stock(p,'ROBT');await p.locator('.research-editor summary').click();
+  await p.locator('.research-form-host button').waitFor();
+  assert.match(await text(p,'.research-form-host'),/暫時無法載入/);
+  assert.equal(await p.locator('#rc-thesis').count(),0);
+  await p.evaluate(()=>__errors=[]);await p.locator('.research-form-host button').click();
+  await p.locator('#rc-thesis').waitFor();
+});
+task('R30','手機深色模式研究卡可操作','320px 不橫向溢出、可儲存論點',[],{width:320,height:720,dark:true},async(p)=>{
+  await editor(p);await p.locator('#rc-thesis').fill('手機研究');
+  await p.locator('.research-form button[type=submit]').click();
+  await p.waitForFunction(()=>document.querySelector('.research-save-status').textContent==='已儲存研究卡');
+  assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.ok(await p.locator('#drawer').evaluate(el=>el.scrollWidth<=el.clientWidth));
+  if(process.env.RESEARCH_SCREENSHOTS){await p.screenshot({path:require('node:path').join(process.env.RESEARCH_SCREENSHOTS,'research-mobile.png')});}
+});
+task('R31','雷達可切回榜單與重載','切換不遺失原榜單或隱藏面板狀態',[],{},async(p)=>{
+  await p.locator('[data-tab=research]').click();await p.locator('[data-category=observe]').click();
+  if(process.env.RESEARCH_SCREENSHOTS){await p.screenshot({path:require('node:path').join(process.env.RESEARCH_SCREENSHOTS,'research-desktop.png'),fullPage:true});}
+  await p.locator('[data-tab=main]').click();assert.ok(await p.locator('#tbl-stock').isVisible());
+  assert.equal(await p.locator('#research').isVisible(),false);
+  await p.locator('[data-tab=research]').click();await p.reload();await p.locator('.research-heading').waitFor();
+  assert.ok(await p.locator('#research').isVisible());
+});
+task('R32','離開榜單的研究卡仍可更新','到期的私人研究卡優先顯示，缺行情仍可閱讀原論點',[],{},async(p)=>{
+  await p.evaluate(()=>{
+    __data.research_cards=[{market:'us',ticker:'OLD',status:'watching',thesis:'保留原研究',review_on:'2026-10-01'},
+      {market:'us',ticker:'LATER',status:'researching',thesis:'下月再看',review_on:'2026-11-01'},
+      {market:'tw',ticker:'2330',status:'researching',thesis:'另一市場',review_on:'2026-10-01'}];
+  });
+  await p.locator('[data-tab=research]').click();await p.locator('[data-saved-ticker=OLD]').waitFor();
+  assert.equal(await p.locator('.research-saved-card').count(),2);
+  assert.equal(await p.locator('.research-saved-card').first().getAttribute('data-saved-ticker'),'OLD');
+  assert.match(await p.locator('[data-saved-ticker=OLD]').innerText(),/已到驗證日期.*本次榜單未收錄/);
+  await p.locator('[data-saved-ticker=OLD]').click();await p.locator('#rc-thesis').waitFor();
+  assert.equal(await p.locator('#rc-thesis').inputValue(),'保留原研究');
+  await p.locator('#rc-status').selectOption('rejected');
+  assert.equal(await p.locator('.research-form .research-due').innerText(),'');
+  await p.locator('.research-form button[type=submit]').click();
+  await p.waitForFunction(()=>document.querySelector('.research-save-status').textContent==='已儲存研究卡');
+});
+task('R33','無登入狀態不提供私人研究卡編輯','不能用空白卡冒充可儲存的私人內容',[],{},async(p)=>{
+  await p.evaluate(()=>__signedIn=false);
+  await stock(p,'ROBT');await p.locator('.research-editor summary').click();
+  await p.waitForFunction(()=>document.querySelector('.research-form-host').textContent.includes('請先登入'));
+  assert.equal(await p.locator('#rc-thesis').count(),0);
+});
+
 let browser;
 const assets = new Map();
 before(async () => {

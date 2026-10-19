@@ -17,6 +17,7 @@ function fixture(options) {
     tw_report_card:[{as_of:'2026-10-02',horizon:5,n:20,avg_ret:.03,spy_ret:.01,excess:.02,hit_rate:.7,best:'2330',best_ret:.12,worst:'2317',worst_ret:-.03}]
   };
   window.__data.user_watch = JSON.parse(localStorage.getItem('usability.watch') || 'null') || window.__data.user_watch;
+  window.__data.research_cards = JSON.parse(localStorage.getItem('usability.research') || '[]');
   class Query {
     constructor(table) {this.table=table;this.a=0;this.b=Infinity;this.filters=[];this.orders=[];}
     select(cols){this.cols=cols;return this;} order(key,opts={}){this.orders.push([key,opts.ascending!==false]);return this;}
@@ -31,11 +32,12 @@ function fixture(options) {
         if (this.operation) {
           const records = window.__data[this.table] || [];
           if (this.operation === 'upsert') {
-            const index = records.findIndex(r => r.ticker === this.payload.ticker);
+            const index = records.findIndex(r => r.ticker === this.payload.ticker && (this.table !== 'research_cards' || r.market === this.payload.market));
             if(index < 0) records.push({...this.payload}); else records[index] = {...records[index],...this.payload};
             window.__data[this.table] = records;
           } else window.__data[this.table] = records.filter(r=>!this.filters.every(f=>f(r)));
           if(this.table==='user_watch')localStorage.setItem('usability.watch',JSON.stringify(window.__data[this.table]));
+          if(this.table==='research_cards')localStorage.setItem('usability.research',JSON.stringify(window.__data[this.table]));
           window.__writes.push({table:this.table,operation:this.operation,payload:this.payload});
           return {data:null,error:null};
         }

@@ -4,6 +4,7 @@
 (() => {
   'use strict';
 
+  const Research = window.Research;
   const CFG = window.APP_CONFIG || {};
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -41,6 +42,8 @@
   };
 
   const FLAGS = {
+    revenue_history_short: { label: '營收歷史待補', tone: 'warn', help: '尚未取得可比較的連續六個月營收；缺漏不代表零成長。' },
+    stale_revenue: { label: '營收月份過期', tone: 'warn', help: '最近營收月份較舊，請核對資料來源。' },
     short_runway: { label: '現金跑道短', tone: 'bad', help: '最近一季淨利為負，若虧損持續，以現有現金估計撐不到一年。' },
     deep_loss: { label: '虧損深', tone: 'bad', help: '淨利率遠低於零，每賺一塊錢營收就虧很多。' },
     high_debt: { label: '負債高', tone: 'warn', help: '負債權益比偏高，景氣或利率變差時更脆弱。' },
@@ -67,7 +70,7 @@
   const textFilters = ['q', 'sector', 'rq', 'portal', 'tq', 'tsector', 'view'];
   const boolFilters = ['hideRisk', 'ropen', 'onlyNew', 'smartOnly', 'watchOnly', 'soon', 'tgrow', 'ttpex', 'tinst'];
   const numberFilters = { minScore: 80, maxCap: Number.MAX_SAFE_INTEGER, minStreak: 100, tmin: 60 };
-  const tabs = ['main', 'watch', 'raise', 'heat', 'report', 'tw', 'twwatch', 'twheat', 'twreport'];
+  const tabs = ['research', 'main', 'watch', 'raise', 'heat', 'report', 'tw', 'twwatch', 'twheat', 'twreport', 'twresearch'];
   const isTaiwan = () => state.tab.startsWith('tw');
   function saveFilters() {
     store.set(filterKey, Object.fromEntries(['tab', ...textFilters, ...boolFilters, ...Object.keys(numberFilters)].map((k) => [k, state[k]])));
@@ -120,7 +123,7 @@
 
   // ── boot & auth ─────────────────────────────────────────────────────────
   function boot() {
-    const ready = window.supabase && window.Tabulator && window.Chart;
+    const ready = window.supabase && window.Tabulator && window.Chart && Research;
     if (!ready) { showNotice('<h2>程式庫載入失敗</h2><p>無法從 CDN 載入 Supabase、Tabulator 或 Chart.js。請檢查網路，或是否被廣告攔截器擋下。</p>'); return; }
     if (!CFG.SUPABASE_URL || /YOUR-PROJECT/.test(CFG.SUPABASE_URL) || !CFG.SUPABASE_ANON_KEY || /YOUR-ANON/.test(CFG.SUPABASE_ANON_KEY)) {
       showNotice('<h2>還沒設定連線</h2><p>打開 <b>docs/config.js</b>，填入 Supabase 的 Project URL 與 anon key（Project Settings → API）。</p>');
@@ -485,7 +488,7 @@
     $$('#market button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.market === m)));
     $('#tabs-us').hidden = m === 'tw';
     $('#tabs-tw').hidden = m !== 'tw';
-    if (m === 'tw') { if (!['tw', 'twwatch', 'twheat', 'twreport'].includes(state.tab)) state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
+    if (m === 'tw') { if (!['tw', 'twwatch', 'twheat', 'twreport', 'twresearch'].includes(state.tab)) state.lastUs = state.tab; setTab(state.twTab || 'tw'); } else setTab(state.lastUs || 'main');
   }
 
   function setTab(tab) {
@@ -500,8 +503,10 @@
     saveFilters();
     renderStatus();
     $$('#tabs-us button, #tabs-tw button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-    if (['tw', 'twwatch', 'twheat', 'twreport'].includes(tab)) state.twTab = tab;
-    const rep = ['report', 'heat', 'twreport', 'twheat'].includes(tab);
+    if (['tw', 'twwatch', 'twheat', 'twreport', 'twresearch'].includes(tab)) state.twTab = tab;
+    const research = tab === 'research' || tab === 'twresearch';
+    $('#research').hidden = !research;
+    const rep = research || ['report', 'heat', 'twreport', 'twheat'].includes(tab);
     $('#filter-toggle').hidden = rep;
     const raise = tab === 'raise';
     const tw = tab === 'tw' || tab === 'twwatch';
@@ -511,6 +516,14 @@
     $('#count').hidden = rep;
     if (rep) {
       ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise', '#legend-tw', '#tbl-tw', '#filters-tw'].forEach((q) => { $(q).hidden = true; });
+      if (research) {
+        const twMarket = tab === 'twresearch';
+        Research.renderRadar($('#research'), twMarket ? state.tw || [] : state.rows, twMarket ? 'tw' : 'us', d => {
+          (twMarket ? openTwStock : openStock)(d);
+          const editor = $('.research-editor'); if (editor) editor.open = true;
+        }, state.loadErrors[twMarket ? '台股榜單' : '股票榜單'], state.sb);
+        return;
+      }
       if (tab === 'report') loadReport(false); else if (tab === 'twreport') loadReport(true); else renderHeat(tab === 'twheat');
       return;
     }
@@ -523,7 +536,7 @@
       if (state.usQ == null) state.usQ = $('#quality').textContent;
       $('#quality').hidden = false;
       const n = (state.tw || []).length;
-      $('#quality').textContent = `共評分 ${nf(n)} 檔（上市＋上櫃）。台股沒有毛利率與 Hacker News 資料，驗證與擁擠度是簡化版；資料來自證交所與櫃買中心。`;
+      $('#quality').textContent = `共評分 ${nf(n)} 檔（上市＋上櫃）。驗證採實際連續月營收年增，歷史不足另行標記；台股缺毛利率與現金流趨勢。資料來自證交所與櫃買中心。`;
       buildTwTable();
       return;
     }
@@ -808,7 +821,8 @@
       </div>
       <div class="d-section radar-wrap"><canvas id="radar" height="220" aria-label="四個面向雷達圖"></canvas><p class="chart-note">藍色是這檔，灰色是台股主榜的中位數。冷門度是擁擠的反面。</p></div>
       ${pillar(0, '成長', d.growth, `最新單月營收年增 ${spct(d.rev_yoy)}，6 個月相對強度 ${spct(d.rs_6m)}（相對加權指數）。`, beats(d.growth))}
-      ${pillar(1, '驗證', d.validated, `單月營收年增 ${spct(d.rev_yoy)}，累計營收年增 ${spct(d.rev_cum_yoy)}。台股沒有毛利率資料，這一項是簡化版。`)}
+      ${pillar(1, '驗證', d.validated, d.scoring_version === 'tw-revenue-v3' ? `實際連續 ${nf(d.revenue_streak_months)} 個月營收年增為正；已取得 ${nf(d.revenue_months)} 個月連續歷史。近三個月合計年增 ${spct(d.rev_3m_yoy, 1)}，比前三個月${isNum(d.rev_accel) ? '變化 ' + (d.rev_accel * 100).toFixed(1) + ' 個百分點' : '尚無法比較'}。` : '舊版僅使用單月與累計年增作代理，尚不能判斷連續成長；請等待新版爬蟲更新。')}
+      <div class="d-section" id="research-card"></div>
       ${pillar(2, '進場', d.accessibility, `市值 ${twd(d.mkt_cap)}，20 日平均成交值 ${twd(d.dollar_vol)}，股價 NT$${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `只看 20 日平均成交值 ${twd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。` : '')}
       <div class="d-section"><h3>法人與內部人</h3>
@@ -825,7 +839,8 @@
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
         : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
       <div class="d-section"><h3>資料來源</h3>
-        <p class="chart-note">股價與成交值：證交所與櫃買中心每日收盤行情。營收：公開資訊觀測站的月營收（通常次月 10 日前公布）。市值是收盤價乘以發行股數。</p>
+        <p class="chart-note">股價與成交值：證交所與櫃買中心每日收盤行情。營收：公開資訊觀測站的月營收與歷史月報。歷史可能經過修正，取得日期不等於當時公告日期；不直接用於無前視偏誤回測。市值是收盤價乘以發行股數。</p>
+        <p class="chart-note">營收月份 ${esc(d.revenue_as_of?.slice(0,7) || '待更新')} · 歷史最近取得 ${esc(d.revenue_observed_at?.slice(0,10) || '未記錄')} · 評分版本 ${esc(d.scoring_version || '舊版代理指標')}</p>
       </div>
       <div class="d-section"><h3>其他數字</h3>
         <dl class="facts">
@@ -836,6 +851,7 @@
           <div><dt>產業</dt><dd>${esc(d.sector || '—')}</dd></div>
         </dl>
       </div>`;
+    Research.mountCard($('#research-card'), d, d.board?.startsWith('tw') ? 'tw' : 'us', state.sb);
     showDrawer();
     drawRadar(d);
   }
@@ -995,6 +1011,7 @@
       ${pillar(1, '驗證', d.validated, `連續 ${nf(d.rev_streak)} 季營收季增，${marginLabel} ${pct(margin)}。${financial ? '金融業以淨利率衡量獲利能力。' : ''}`, isNum(margin) ? '' : `目前缺少${marginLabel}資料，請留意資料完整度。`)}
       ${pillar(2, '進場', d.accessibility, `市值 ${usd(d.mkt_cap)}，20 日平均成交額 ${usd(d.dollar_vol)}，股價 $${nf(d.price, 2)}。`)}
       ${pillar(3, '擁擠', d.attention, `Hacker News 近 30 天 ${isNum(d.hn_mentions) ? nf(d.hn_mentions) + ' 則' : '沒有資料'}，20 日平均成交額 ${usd(d.dollar_vol)}。這一項越高，總分被扣得越多。`, isNum(d.attention) ? `比約 ${Math.round(clamp(d.attention))}% 的股票更擁擠。目前沒有分析師與法人資料。` : '')}
+      <div class="d-section" id="research-card"></div>
       <div class="d-section"><h3>我的筆記</h3><div id="watch-box"></div></div>
       <div class="d-section"><h3>大戶動向</h3><div id="smart-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>風險標記</h3>${f.length
@@ -1017,6 +1034,7 @@
           <div><dt>評分版本</dt><dd>${esc(d.scoring_version || '未記錄')}</dd></div>
         </dl>
       </div>`;
+    Research.mountCard($('#research-card'), d, d.board?.startsWith('tw') ? 'tw' : 'us', state.sb);
     showDrawer();
     drawRadar(d);
     renderWatch(d);
