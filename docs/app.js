@@ -518,7 +518,7 @@
       ['#filters-stock', '#filters-raise', '#views', '#quality', '#legend-stock', '#legend-raise', '#legend-tw', '#tbl-tw', '#filters-tw'].forEach((q) => { $(q).hidden = true; });
       if (research) {
         const twMarket = tab === 'twresearch';
-        Research.renderRadar($('#research'), twMarket ? state.tw || [] : state.rows, twMarket ? 'tw' : 'us', d => {
+        state.refreshResearch = Research.renderRadar($('#research'), twMarket ? state.tw || [] : state.rows, twMarket ? 'tw' : 'us', d => {
           (twMarket ? openTwStock : openStock)(d);
           const editor = $('.research-editor'); if (editor) editor.open = true;
         }, state.loadErrors[twMarket ? '台股榜單' : '股票榜單'], state.sb);
@@ -941,6 +941,7 @@
     destroyCharts();
     setTimeout(() => { if (!dr.classList.contains('open')) $('#scrim').hidden = true; }, 240);
     state.lastFocus?.focus?.();
+    if (['research', 'twresearch'].includes(state.tab)) state.refreshResearch?.();
   }
 
   function onKey(e) {
@@ -948,7 +949,7 @@
     if (!dr.classList.contains('open')) return;
     if (e.key === 'Escape') { closeDrawer(); return; }
     if (e.key === 'Tab') {  // keep focus inside the drawer while it is open
-      const f = $$('a[href],button,input,textarea,select,[tabindex]', dr)
+      const f = $$('a[href],button,input,textarea,select,summary,[tabindex]', dr)
         .filter((el) => !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden],[inert]') && el.getClientRects().length);
       if (!f.length) return;
       const first = f[0], last = f[f.length - 1];

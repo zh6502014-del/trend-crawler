@@ -257,6 +257,35 @@ task('R33','無登入狀態不提供私人研究卡編輯','不能用空白卡�
   assert.equal(await p.locator('#rc-thesis').count(),0);
 });
 
+task('I34','台股詳情可用鍵盤開啟研究卡','Tab 依序經過外部連結後可到研究卡展開鈕',[],{},async(p)=>{
+  await p.locator('[data-market=tw]').click();await p.locator('#t-q').fill('2330');await settle(p);
+  await p.locator('#tbl-tw .tabulator-row').first().locator('[tabulator-field=score]').click();
+  await p.locator('#drawer.open').waitFor();
+  await p.locator('#drawer .d-links a').last().focus();await p.keyboard.press('Tab');
+  assert.equal(await p.locator('.research-editor summary').evaluate(el=>el===document.activeElement),true,'Tab 跳過研究卡，回到關閉按鈕');
+  await p.keyboard.press('Enter');await p.locator('#rc-thesis').waitFor();
+});
+task('I35','雷達內儲存後返回即可看到研究卡','儲存成功後我的研究立即更新',[],{},async(p)=>{
+  await p.locator('[data-tab=research]').click();await p.locator('[data-category=observe]').click();
+  await p.locator('[data-research-ticker=ROBT]').click();await p.locator('#rc-thesis').waitFor();
+  await p.locator('#rc-thesis').fill('返回雷達可見的新論點');
+  await p.locator('.research-form button[type=submit]').click();
+  await p.waitForFunction(()=>document.querySelector('.research-save-status').textContent==='已儲存研究卡');
+  await p.keyboard.press('Escape');
+  await p.locator('[data-saved-ticker=ROBT]').waitFor();
+  assert.match(await text(p,'.research-saved-body'),/返回雷達可見的新論點/);
+});
+task('I36','雷達依今天的日期判斷基本面過期','已超過 7 天的基本面不可沿用評分當天的舊年齡',[],{},async(p)=>{
+  await p.evaluate(()=>{
+    const r=__data.latest_board[0];r.rs_6m=-.1;r.fundamentals_fetched_at='2026-10-09T00:00:00Z';r.fundamentals_age_days=7;
+  });
+  await p.locator('#reload').click();await p.waitForFunction(()=>!document.querySelector('#reload').disabled);
+  await p.locator('[data-tab=research]').click();
+  assert.equal(await p.locator('[data-research-ticker=FINB]').count(),0,'基本面已取得 9 天，仍出現在優先研究');
+  await p.locator('[data-category=incomplete]').click();
+  assert.ok(await p.locator('[data-research-ticker=FINB]').isVisible());
+});
+
 let browser;
 const assets = new Map();
 before(async () => {

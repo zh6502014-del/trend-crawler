@@ -17,7 +17,8 @@
     if (!num(d.rs_6m)) gaps.push('缺相對股價表現');
     if (dateAge(d.as_of, now) > 7 || dateAge(d.as_of, now) < 0) gaps.push('行情日期缺漏或待更新');
     if ((d.flags || []).includes('data_thin')) gaps.push('財報資料不足');
-    if ((d.flags || []).includes('stale_fundamentals') || (num(d.fundamentals_age_days) && d.fundamentals_age_days > 7)) gaps.push('基本面待更新');
+    if ((d.flags || []).includes('stale_fundamentals') || (num(d.fundamentals_age_days) && d.fundamentals_age_days > 7)
+      || (market === 'us' && d.fundamentals_fetched_at && dateAge(d.fundamentals_fetched_at.slice(0,10),now) > 7)) gaps.push('基本面待更新');
     if (market === 'us' && !d.fundamentals_fetched_at) gaps.push('基本面取得日期未記錄');
     if (market === 'tw') {
       if (d.revenue_history_status !== 'complete' || !num(d.revenue_months) || d.revenue_months < 6) gaps.push('需補足連續六個月營收');
@@ -71,9 +72,11 @@
         if(error)throw error;
         if(!savedHost.isConnected)return;
         const cards=data || [];
+        const focusedTicker = savedHost.contains(document.activeElement) ? document.activeElement.dataset.savedTicker : null;
         cards.sort((a,b)=>Number(b.status!=='rejected' && !!b.review_on && b.review_on<=today())-Number(a.status!=='rejected' && !!a.review_on && a.review_on<=today()) || (a.review_on || '9999').localeCompare(b.review_on || '9999'));
         savedHost.innerHTML=cards.length ? `<p class="chart-note">${cards.length>=200?'顯示最早的 200 張研究卡。':'已儲存 '+cards.length+' 張研究卡。'}到期的驗證優先顯示。</p><div class="research-saved-list">${cards.map(c=>`<button type="button" class="research-saved-card" data-saved-ticker="${esc(c.ticker)}"><strong>${esc(c.ticker)} · ${esc(statuses[c.status] || '研究中')}</strong><span>${esc(c.thesis?.slice(0,160) || '尚未填寫論點')}</span><small class="${c.review_on && c.review_on<=today() && c.status!=='rejected'?'research-due':''}">${c.review_on ? `${c.review_on<=today() && c.status!=='rejected'?'已到驗證日期':'驗證日期'} ${esc(c.review_on)}`:'尚未設定驗證日期'}${rows.some(d=>d.ticker===c.ticker)?'':' · 本次榜單未收錄'}</small></button>`).join('')}</div>` : '<p class="chart-note">尚無研究卡。開啟任一股票，展開「編輯研究卡」即可建立。</p>';
         savedHost.querySelectorAll('[data-saved-ticker]').forEach(b=>b.onclick=()=>open(rows.find(d=>d.ticker===b.dataset.savedTicker) || {ticker:b.dataset.savedTicker,name:'本次榜單未收錄，請重新核對行情與財報。',board:market==='tw'?'tw_watch':'watch',flags:['data_thin']}));
+        if (focusedTicker) [...savedHost.querySelectorAll('[data-saved-ticker]')].find(b=>b.dataset.savedTicker===focusedTicker)?.focus();
       } catch(e) {
         if(!savedHost.isConnected)return;
         savedHost.innerHTML='<p class="chart-note">私人研究卡暫時無法載入，股票研究線索仍可使用。</p><button class="btn ghost" type="button">重試研究卡</button>';
@@ -81,6 +84,7 @@
       }
     }
     if(sb)loadSaved();else savedHost.textContent='尚未連線。';
+    return loadSaved;
   }
 
   const fields = [
