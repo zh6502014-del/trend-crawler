@@ -44,6 +44,8 @@ alter table public.tw_signals add column if not exists revenue_as_of date;
 alter table public.tw_signals add column if not exists revenue_observed_at timestamptz;
 alter table public.tw_signals add column if not exists revenue_history_status text;
 alter table public.tw_signals add column if not exists scoring_version text;
+alter table public.tw_signals add column if not exists ps numeric;
+alter table public.tw_signals add column if not exists rel_val numeric;
 
 create or replace view public.tw_latest_board with (security_invoker = true) as
 select
@@ -54,7 +56,8 @@ select
   prev.score as score_7d, prev.rank as rank_7d,
   g.inst_5d, g.inst_20d, g.foreign_20d, g.trust_20d, g.pledge_ratio,
   g.rev_3m_yoy, g.rev_prev_3m_yoy, g.rev_accel, g.revenue_months, g.revenue_streak_months,
-  g.revenue_as_of, g.revenue_observed_at, g.revenue_history_status, g.scoring_version
+  g.revenue_as_of, g.revenue_observed_at, g.revenue_history_status, g.scoring_version,
+  g.ps, g.rel_val
 from public.tw_scores s
 join public.tw_entities e on e.ticker = s.ticker
 left join public.tw_signals g on g.ticker = s.ticker and g.as_of = s.as_of
