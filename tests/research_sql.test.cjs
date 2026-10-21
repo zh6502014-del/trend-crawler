@@ -14,17 +14,20 @@ before(async()=>{
 });
 after(async()=>await db.close());
 test('research migration is repeatable and preserves Taiwan board dependencies',async()=>{
-  await db.exec('create view public.tw_consumer as select ticker from public.tw_latest_board');
+  await db.exec('create view public.tw_consumer as select ticker, ps, rel_val from public.tw_latest_board');
+  await db.exec(`insert into tw_entities(ticker,name) values ('1234','Example');
+    insert into tw_scores(ticker,as_of,board) values ('1234','2026-10-16','tw_main');
+    insert into tw_signals(ticker,as_of,rev_3m_yoy,revenue_streak_months,scoring_version,ps,rel_val)
+      values ('1234','2026-10-16',.3,5,'tw-revenue-v3',2.5,.75);`);
   await db.exec(read('migrations/20261018_research_radar.sql'));
   await db.exec(read('migrations/20261018_research_radar.sql'));
   await db.exec(read('schema_tw.sql'));
-  await db.exec(`insert into tw_entities(ticker,name) values ('1234','Example');
-    insert into tw_scores(ticker,as_of,board) values ('1234','2026-10-16','tw_main');
-    insert into tw_signals(ticker,as_of,rev_3m_yoy,revenue_streak_months,scoring_version)
-      values ('1234','2026-10-16',.3,5,'tw-revenue-v3');`);
   const r=(await db.query('select * from tw_latest_board')).rows[0];
   assert.equal(r.revenue_streak_months,5);assert.equal(r.scoring_version,'tw-revenue-v3');
-  assert.equal((await db.query('select * from tw_consumer')).rows.length,1);
+  const consumer=(await db.query('select * from tw_consumer')).rows;
+  assert.equal(consumer.length,1);
+  assert.equal(Number(consumer[0].ps),2.5);
+  assert.equal(Number(consumer[0].rel_val),.75);
   await db.exec(`insert into tw_scores(ticker,as_of,board,score,rank) values ('1234','2026-10-01','tw_main',88,1);
     insert into tw_signals(ticker,as_of) values ('1234','2026-10-01');`);
   assert.equal((await db.query('select score_7d from tw_latest_board')).rows[0].score_7d,null);
