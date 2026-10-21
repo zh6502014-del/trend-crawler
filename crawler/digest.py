@@ -266,14 +266,21 @@ def run_digest(store, today: dt.date | None = None, market: str | None = None) -
     text = compose(cur, prev, smart, raises, as_of, watch_lines([t for t in watch if not is_tw(t)], wt, wp, smart), fired, tw)
     if not text:
         return {"sent": False, "reason": "nothing new"}
-    sent = []
+    sent, errors, skipped = [], {}, {}
     # LINE is authoritative for alert delivery when it is configured. A Telegram
     # success alone must never silently consume an alert that LINE failed to send.
     for name, enabled, recipient in (("line", use_line, line_user), ("telegram", use_tg, chat)):
         if not enabled:
             continue
+        record = None
+        key = f"{name}:{recipient}:{market}:{as_of}"
+        def record_status(status, error=None):
+            if record:
+                store.update("line_deliveries", {"delivery_key": key}, {
+                    "status": status, "last_error": error,
+                    "attempted_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                })
         try:
-            key = f"{name}:{recipient}:{market}:{as_of}"
             record = store.prepare_delivery(key, recipient, text, [a["id"] for a in fired]) if hasattr(store, "prepare_delivery") else None
             body = record["body"] if record else text
             ids = record["alert_ids"] if record else [a["id"] for a in fired]
@@ -284,13 +291,19 @@ def run_digest(store, today: dt.date | None = None, market: str | None = None) -
                         store.update("user_alerts", {"id": alert_id}, {"fired_at": record["sent_at"]})
                 continue
             if record and dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["created_at"].replace("Z", "+00:00")) >= dt.timedelta(hours=23):
+                errors[name] = "retry_expired"
+                record_status("expired", "retry_expired")
                 print(f"  digest: {name} pending delivery expired; manual review required")
                 continue  # Never reuse a retry key after LINE's 24-hour guarantee.
             if name == "line":
                 line_messages(body)  # Validate completeness before sending anything.
                 ok, why = line_budget_ok(line_token)
                 if not ok:
-                    print(f"  digest: {why}")
+                    # Quota exhaustion is expected; unavailable quota is an actionable failure.
+                    code = "quota_limit" if why.startswith("used ") or why.startswith("plan is not") else "quota_unavailable"
+                    (skipped if code == "quota_limit" else errors)[name] = code
+                    record_status("skipped" if code == "quota_limit" else "unknown", code)
+                    print(f"  digest: {name} {code}; not sending")
                     continue
                 if record:
                     send_line(body, line_token, recipient, record["retry_key"])
@@ -300,16 +313,38 @@ def run_digest(store, today: dt.date | None = None, market: str | None = None) -
                 send_telegram(body, token, recipient)
             now = dt.datetime.now(dt.timezone.utc).isoformat()
             if record:
-                store.update("line_deliveries", {"delivery_key": key}, {"sent_at": now})
+                store.update("line_deliveries", {"delivery_key": key}, {"sent_at": now, "status": "sent", "last_error": None, "attempted_at": now})
             if name == "line" or not use_line:
                 for alert_id in ids:
                     store.update("user_alerts", {"id": alert_id}, {"fired_at": now})
             sent.append(name)
         except Exception as e:
-            print(f"  digest: {name} failed: {type(e).__name__}: {str(e)[:100]}")
-    return {"sent": bool(sent), "channels": sent}
+            # Exception strings may contain Telegram credentials or private message bodies.
+            response = getattr(e, "response", None)
+            status = getattr(response, "status_code", None)
+            code = f"http_{status}" if status else "delivery_" + type(e).__name__
+            errors[name] = code
+            try:
+                record_status("failed", code)
+            except Exception:
+                errors[name] += ":ledger_unavailable"
+            print(f"  digest: {name} failed ({errors[name]})")
+    return {"sent": bool(sent), "channels": sent, "errors": errors, "skipped": skipped}
+
+
+class DeliveryFailure(RuntimeError):
+    def __init__(self, stats):
+        self.stats = stats
+        super().__init__("Digest delivery failed: " + ", ".join(f"{k}={v}" for k, v in stats["errors"].items()))
+
+
+def run_digest_checked(store, today=None, market=None):
+    result = run_digest(store, today, market)
+    if result.get("errors"):
+        raise DeliveryFailure(result)
+    return result
 
 
 if __name__ == "__main__":
     from .store import Supabase
-    print(run_digest(Supabase()))
+    print(run_digest_checked(Supabase()))

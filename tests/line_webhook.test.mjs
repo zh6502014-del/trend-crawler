@@ -125,7 +125,8 @@ test("slow database → timeout reply (handle)", async () => {
   const mac = Buffer.from(await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", new TextEncoder().encode("s"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), new TextEncoder().encode(body))).toString("base64");
   const replies = [];
   const fetchFn = async (url, opt) => {
-    if (String(url).includes("/rpc/claim_line_event")) return {ok:true,json:async()=>true};
+    if (String(url).includes("/rpc/begin_line_event")) return {ok:true,json:async()=>({action:"execute"})};
+    if (String(url).includes("/rpc/")) return {ok:true,json:async()=>true};
     if (String(url).includes("api.line.me")) { replies.push(JSON.parse(opt.body)); return { ok: true, text: async () => "" }; }
     return new Promise(() => {}); // database never answers
   };

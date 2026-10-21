@@ -44,6 +44,7 @@ alter table public.tw_signals add column if not exists revenue_as_of date;
 alter table public.tw_signals add column if not exists revenue_observed_at timestamptz;
 alter table public.tw_signals add column if not exists revenue_history_status text;
 alter table public.tw_signals add column if not exists scoring_version text;
+-- Preserve valuation columns when this migration is re-run after 20261019.
 alter table public.tw_signals add column if not exists ps numeric;
 alter table public.tw_signals add column if not exists rel_val numeric;
 

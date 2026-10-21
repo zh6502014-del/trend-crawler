@@ -12,7 +12,7 @@ import re
 import urllib.error
 import urllib.request
 
-SCHEMA_VERSION = '2026-10-18.1'  # Bump together with line_schema_version() for SQL changes.
+SCHEMA_VERSION = '2026-10-21.1'  # Bump together with line_schema_version() for SQL changes.
 
 
 def schema_is_current(ref):

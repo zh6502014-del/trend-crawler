@@ -5,7 +5,7 @@ name: deploy-line-bot
 on:
   push:
     branches: [main]
-    paths: ["supabase/functions/**", "supabase/schema_line.sql", "scripts/apply_line_schema.py", "scripts/sync_line_menu.mjs", "scripts/check_line_login.mjs", "docs/line-auth.js", "docs/richmenu*.png", "crawler/digest.py", ".github/workflows/deploy-line-bot.yml", ".github/workflows/checks.yml"]
+    paths: ["supabase/functions/**", "supabase/schema_line.sql", "scripts/apply_line_schema.py", "scripts/sync_line_menu.mjs", "scripts/check_line_login.mjs", "docs/line-auth.js", "docs/app.js", "docs/index.html", "docs/richmenu*.png", "crawler/digest.py", "crawler/run.py", ".github/workflows/deploy-line-bot.yml", ".github/workflows/checks.yml"]
   workflow_dispatch:
 
 permissions:

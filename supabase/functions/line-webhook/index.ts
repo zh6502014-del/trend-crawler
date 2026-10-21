@@ -2,7 +2,9 @@
 // Secrets (Supabase > Edge Functions > Secrets): LINE_CHANNEL_SECRET, LINE_CHANNEL_TOKEN, LINE_USER_ID, DASHBOARD_URL (optional).
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase. Deploy with JWT verification OFF (LINE has no JWT);
 // the request is authenticated by the LINE signature instead.
-import { resolveInput, nextSession, cleanName } from './assistant.ts';
+import { resolveInput, nextSession, cleanName, sessionWithPreferences } from './assistant.ts';
+import { research } from './research.ts';
+import { reply, durableReply, systemStatus } from './delivery.ts';
 import { explain } from './ai.ts';
 import menuConfig from './menu.json' with { type: 'json' };
 import { syncRichMenus } from './richmenu.ts';
@@ -312,6 +314,9 @@ export function helpText() {
     "台股法人・台股成績單・台股產業 半導體",
     "",
     "【其他】",
+    "研究雷達・台股成長估值・我的研究",
+    "預設台股／美股・記住這檔・我的設定・清除偏好",
+    "系統狀態　查看回覆與推播異常",
     "更多功能　募資、成績單、產業、額度、儀表板",
     "設定選單　重建底部圖文選單",
   ].join("\n");
@@ -336,6 +341,9 @@ export function moreCard(dash, oneTime = false, tw = false) {
     txt(`${tw ? '台股' : '美股'}工具箱`, { size: "md", weight: "bold", color: "#eef1f8" }),
     pair(btn("每週變化", tw ? "台股週報" : "美股 週報"), btn(tw ? "法人動向" : "大戶動向", tw ? "台股法人" : "美股 大戶")),
     pair(btn("個股解讀", "個股解讀"), btn("我的筆記", "我的筆記")),
+    pair(btn("研究雷達", tw ? "台股研究雷達" : "美股研究雷達"), btn("成長估值", "台股成長估值")),
+    pair(btn("我的研究", tw ? "台股我的研究" : "美股我的研究"), btn("我的設定", "我的設定")),
+    pair(btn("系統狀態", "系統狀態"), btn("記住這檔", "記住這檔")),
     pair(btn("募資", "募資"), btn("成績單", "成績單")),
     pair(btn("提醒清單", "提醒清單"), btn("額度", "額度")),
     pair(btn("台股成績單", "台股成績單"), btn("台股產業", "台股產業")),
@@ -529,6 +537,22 @@ export async function run(cmd, db, ctx) {
   const dash = env("DASHBOARD_URL");
   const enc = encodeURIComponent;
   switch (cmd.cmd) {
+    case 'radar': case 'value': case 'researchcards': case 'researchstock':
+      return research({...cmd,tw:cmd.ticker ? isTw(cmd.ticker) : cmd.tw}, db, ctx);
+    case 'status': return systemStatus(db);
+    case 'preferences': {
+      const uid=await db.ownerId();
+      const p=(await db.get(`line_preferences?user_id=eq.${uid}&limit=1`))[0] || {};
+      return withQuick([{type:'text',text:`我的設定\n預設市場：${p.market==='tw'?'台股':'美股'}\n記住的股票：${p.focus_ticker || '未設定'}\n\n閒置超過 24 小時後使用這些偏好。只保存你明確設定的市場與股票，不保存完整對話，也不送給 AI。\n傳送「清除偏好」可清除設定。`}],[qr('預設台股','預設台股'),qr('預設美股','預設美股'),qr('清除偏好','清除偏好')]);
+    }
+    case 'setpreference': case 'remember': case 'forgetpreferences': {
+      const uid=await db.ownerId();
+      const p=(await db.get(`line_preferences?user_id=eq.${uid}&limit=1`))[0] || {};
+      const market=cmd.cmd==='forgetpreferences'?'us':cmd.cmd==='remember'?(isTw(cmd.ticker)?'tw':'us'):(cmd.tw?'tw':'us');
+      const focus=cmd.cmd==='forgetpreferences'?null:cmd.cmd==='remember'?cmd.ticker:p.focus_ticker || null;
+      await db.send('POST','line_preferences?on_conflict=user_id',{user_id:uid,market,focus_ticker:focus,updated_at:ctx.eventTime || new Date().toISOString()},'resolution=merge-duplicates,return=minimal');
+      return withQuick([{type:'text',text:cmd.cmd==='forgetpreferences'?'已清除個人偏好與目前對話選擇，自選、筆記及研究卡仍保留。':cmd.cmd==='remember'?`已記住 ${cmd.ticker}，下次對話可接續研究。`:`已設定預設${market==='tw'?'台股':'美股'}。`}],[qr('查看設定','我的設定')]);
+    }
     case 'message': return withQuick([{ type: 'text', text: cmd.text }], (cmd.choices || []).map((x) => qr(x.label, x.text)));
     case 'reset': return withQuick([{ type: 'text', text: '已重設目前市場、股票與頁碼。' }], MAIN_QUICK);
     case 'explain': case 'explanation': return explain(cmd, db, ctx);
@@ -792,24 +816,15 @@ export async function verifySignature(body, signature, secret) {
 
 export const TIMEOUT_MS = 8000; // reply tokens last ~1 minute; answer within 8s or say so
 const TIMEOUT = Symbol("timeout");
-const WRITE_CMDS = new Set(["add", "del", "note", "clearnote", "alert", "delalert", "menu"]);
+const WRITE_CMDS = new Set(["add", "del", "note", "clearnote", "alert", "delalert", "menu", "setpreference", "remember", "forgetpreferences"]);
 export const timeoutText = (cmd) => WRITE_CMDS.has(cmd.cmd)
-  ? "資料庫回應太慢（超過 8 秒）。這個操作可能已完成，請用「自選」或「提醒清單」確認。"
+  ? "資料庫回應太慢（超過 8 秒）。這個操作可能已完成，請用「自選」、「我的筆記」、「提醒清單」或「我的設定」確認。"
   : "資料庫回應太慢（超過 8 秒），可能剛從休眠醒來。請再輸入一次。";
 function withTimeout(p, ms) {
   p.catch(() => {}); // a late failure after the timeout must not become an unhandled rejection
   let t;
   const to = new Promise((res) => { t = setTimeout(() => res(TIMEOUT), ms); });
   return Promise.race([p, to]).finally(() => clearTimeout(t));
-}
-
-async function lineReply(fetchFn, replyToken, messages) {
-  const r = await fetchFn("https://api.line.me/v2/bot/message/reply", {
-    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env("LINE_CHANNEL_TOKEN") },
-    body: JSON.stringify({ replyToken, messages: messages.slice(0, 5) }),
-    signal: AbortSignal.timeout(7500),
-  });
-  if (!r.ok) console.error("reply failed", r.status, (await r.text()).slice(0, 300));
 }
 
 async function quotaText(fetchFn) {
@@ -845,40 +860,59 @@ export async function handle(req, fetchFn = fetch) {
   const owner = env("LINE_USER_ID");
   let payload; try { payload = JSON.parse(body); } catch { return new Response("ok"); }
   const db = makeDb(fetchFn);
+  let retryNeeded = false;
   for (const ev of payload.events || []) {
-    // Replies to group events are visible to everybody in that group, including sign-in links.
     if (!owner || ev.source?.userId !== owner || ev.source?.type !== 'user') continue;
     const menu = ev.type === 'postback' && /^menu=(us|tw)$/.exec(ev.postback?.data || '');
     if (!menu && (ev.type !== 'message' || ev.message?.type !== 'text')) continue;
+    if (!ev.webhookEventId) continue;
+    const attempt=crypto.randomUUID(), args={p_event_id:ev.webhookEventId,p_attempt:attempt};
     try {
-      if (!ev.webhookEventId || !(await db.rpc('claim_line_event', { p_event_id: ev.webhookEventId }))) continue;
+      const claim=await db.rpc('begin_line_event',args);
+      if (claim.action==='done') continue;
+      if (claim.action==='busy') { retryNeeded=true; continue; }
+      let out=claim.messages || [], executing={cmd:'unknown'}, issue=null, timedOut=false;
+      if (claim.action==='execute') {
+        const task=async()=>{
+          const uid=await db.ownerId();
+          const [sessions,prefs]=await Promise.all([
+            db.get(`line_sessions?user_id=eq.${uid}&limit=1`),
+            db.get(`line_preferences?user_id=eq.${uid}&limit=1`),
+          ]);
+          if (timedOut) return [];
+          const session=sessionWithPreferences(sessions[0],prefs[0]);
+          const cmd=menu?{cmd:'market',tw:menu[1]==='tw'}:await resolveInput(ev.message.text,parseCommand,db,session,ALIASES);
+          if (timedOut) return [];
+          executing=cmd;
+          const eventTime=new Date(ev.timestamp || Date.now()).toISOString();
+          const result=menu?[]:await run(cmd,db,{fetchFn,eventTime,
+            setupMenu:()=>setupMenu(fetchFn),quota:()=>quotaText(fetchFn),
+            waitUntil:typeof EdgeRuntime!=='undefined'?(p)=>EdgeRuntime.waitUntil(p):undefined});
+          if (!timedOut) await db.send('POST','line_sessions?on_conflict=user_id',
+            {user_id:uid,...nextSession(session,cmd),updated_at:eventTime},'resolution=merge-duplicates,return=minimal');
+          return result;
+        };
+        try {
+          out=await withTimeout(task(),TIMEOUT_MS);
+          if (out===TIMEOUT) {timedOut=true;issue='operation_timeout';out=menu?[]:[{type:'text',text:timeoutText(executing)}];}
+        } catch (_) {
+          issue='operation_failed';
+          out=menu?[]:[{type:'text',text:WRITE_CMDS.has(executing.cmd)?'操作中斷，可能已完成。請先查看自選、筆記、提醒清單或我的設定。':'查詢失敗，稍後再試。輸入「系統狀態」可查異常。'}];
+        }
+        const prepared=await db.rpc('prepare_line_reply',{...args,p_messages:durableReply(executing,out),p_error:issue});
+        if (!prepared) {retryNeeded=true;continue;}
+      } else if (claim.action!=='reply') throw new Error('invalid event claim');
+      const result=out.length?await reply(fetchFn,env('LINE_CHANNEL_TOKEN'),ev.replyToken,out):{status:issue?'failed':'replied',error:issue};
+      if (result.error || issue) console.error('line_event',JSON.stringify({event:ev.webhookEventId,code:result.error || issue}));
+      const saved=await db.rpc('finish_line_reply',{...args,p_status:result.status,p_error:result.error});
+      if (!saved || result.status==='retry') retryNeeded=true;
     } catch (_) {
-      // No durable claim = no side effects. Ask LINE to redeliver once storage is back.
-      return new Response('event storage unavailable', { status: 503 });
-    }
-    try {
-      let executing = { cmd: 'unknown' };
-      const task = async () => {
-        const uid = await db.ownerId();
-        const saved = (await db.get(`line_sessions?user_id=eq.${uid}&limit=1`))[0];
-        const session = saved && Date.now() - Date.parse(saved.updated_at) < 86400000 ? saved : {};
-        const cmd = menu ? { cmd: 'market', tw: menu[1] === 'tw' } : await resolveInput(ev.message.text, parseCommand, db, session, ALIASES);
-        executing = cmd;
-        const next = nextSession(session, cmd);
-        const out = menu ? [] : await run(cmd, db, { fetchFn, setupMenu: () => setupMenu(fetchFn), quota: () => quotaText(fetchFn),
-          waitUntil: typeof EdgeRuntime !== 'undefined' ? (p) => EdgeRuntime.waitUntil(p) : undefined });
-        await db.send('POST', 'line_sessions?on_conflict=user_id', { user_id: uid, ...next, updated_at: new Date(ev.timestamp || Date.now()).toISOString() }, 'resolution=merge-duplicates,return=minimal');
-        return out;
-      };
-      const out = await withTimeout(task(), TIMEOUT_MS);
-      if (menu) continue;
-      await lineReply(fetchFn, ev.replyToken, out === TIMEOUT ? [{ type: "text", text: timeoutText(executing) }] : out);
-    } catch (e) {
-      console.error("event failed", String(e));
-      try { await lineReply(fetchFn, ev.replyToken, [{ type: "text", text: "查詢失敗，稍後再試。" }]); } catch (_) { /* ignore */ }
+      // Failed persistence must never acknowledge an event or re-run its operation.
+      console.error('line_event',JSON.stringify({event:ev.webhookEventId,code:'event_storage_unavailable'}));
+      retryNeeded=true;
     }
   }
-  return new Response("ok"); // LINE only needs a 2xx
+  return new Response(retryNeeded?'retry pending':'ok',{status:retryNeeded?503:200});
 }
 
 if (typeof Deno !== "undefined" && Deno.serve) Deno.serve((req) => handle(req));

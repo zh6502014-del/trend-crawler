@@ -20,6 +20,7 @@ test('research migration is repeatable and preserves Taiwan board dependencies',
     insert into tw_signals(ticker,as_of,rev_3m_yoy,revenue_streak_months,scoring_version,ps,rel_val)
       values ('1234','2026-10-16',.3,5,'tw-revenue-v3',2.5,.75);`);
   await db.exec(read('migrations/20261018_research_radar.sql'));
+  await db.exec(read('migrations/20261019_tw_relative_value.sql'));
   await db.exec(read('migrations/20261018_research_radar.sql'));
   await db.exec(read('schema_tw.sql'));
   const r=(await db.query('select * from tw_latest_board')).rows[0];
@@ -28,6 +29,11 @@ test('research migration is repeatable and preserves Taiwan board dependencies',
   assert.equal(consumer.length,1);
   assert.equal(Number(consumer[0].ps),2.5);
   assert.equal(Number(consumer[0].rel_val),.75);
+  await db.exec("update tw_signals set ps=3,rel_val=75 where ticker='1234';");
+  await db.exec(read('migrations/20261018_research_radar.sql'));
+  const valuation=(await db.query('select ps,rel_val from tw_latest_board')).rows[0];
+  assert.equal(Number(valuation.ps),3);assert.equal(Number(valuation.rel_val),75);
+  assert.equal((await db.query('select * from tw_consumer')).rows.length,1);
   await db.exec(`insert into tw_scores(ticker,as_of,board,score,rank) values ('1234','2026-10-01','tw_main',88,1);
     insert into tw_signals(ticker,as_of) values ('1234','2026-10-01');`);
   assert.equal((await db.query('select score_7d from tw_latest_board')).rows[0].score_7d,null);

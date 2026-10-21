@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCommand, run, handle, ALIASES } from '../supabase/functions/line-webhook/index.ts';
-import { resolveInput, nextSession } from '../supabase/functions/line-webhook/assistant.ts';
+import { resolveInput, nextSession, sessionWithPreferences } from '../supabase/functions/line-webhook/assistant.ts';
 import { explain, publicFacts, explanationKey } from '../supabase/functions/line-webhook/ai.ts';
 
 const stock = {ticker:'2330',name:'台積電',as_of:'2026-10-16',score:75,score_7d:70,growth:80,validated:70,attention:20,flags:[],note:'PRIVATE NOTE',user_id:'PRIVATE ID'};
@@ -67,8 +67,9 @@ test('owner group messages never receive private data; bad signatures are reject
 test('persistent event claim blocks duplicates across fresh handlers; failure gives 503',async()=>{
   settings(); const seen=new Set(); let replies=0;
   const fetcher=async(url,opt={})=>{
-    if(url.includes('/rpc/claim_line_event')) {const id=JSON.parse(opt.body).p_event_id;if(seen.has(id))return ok(false);seen.add(id);return ok(true);}
-    if(url.includes('/line_sessions')) return ok([]);
+    if(url.includes('/rpc/begin_line_event')) {const id=JSON.parse(opt.body).p_event_id;if(seen.has(id))return ok({action:'done'});seen.add(id);return ok({action:'execute'});}
+    if(url.includes('/rpc/'))return ok(true);
+    if(url.includes('/line_sessions') || url.includes('/line_preferences')) return ok([]);
     if(url.includes('/message/reply')) {replies++;return ok({});}
     throw new Error('Unexpected call '+url);
   };
@@ -82,7 +83,9 @@ test('persistent event claim blocks duplicates across fresh handlers; failure gi
 test('rich menu postback persists market without sending a reply',async()=>{
   settings(); let state;
   const fetcher=async(url,opt={})=>{
+    if(url.includes('/rpc/begin_line_event'))return ok({action:'execute'});
     if(url.includes('/rpc/'))return ok(true);
+    if(url.includes('/line_preferences'))return ok([]);
     if(url.includes('/line_sessions')){if(opt.method==='POST') state=JSON.parse(opt.body);return ok([]);}
     throw new Error('Unexpected request');
   };
@@ -124,4 +127,39 @@ test('AI budget exhaustion and API errors preserve factual queries',async()=>{
   await explain({cmd:'explain',ticker:'2330'},mock,ctx);await Promise.all(jobs);
   assert.equal(result.status,'failed');assert.equal(api,1);
   delete process.env.LINE_AI_ENABLED;
+});
+
+test('natural research language and explicit preferences preserve safe command meanings',async()=>{
+  for (const [input,expected] of [
+    ['請幫我看看台積電？',{cmd:'stock',ticker:'2330'}],
+    ['請幫我把台積電加入自選',{cmd:'add',ticker:'2330'}],
+    ['台股有哪些值得研究的股票？',{cmd:'radar',tw:true,category:'priority'}],
+    ['台股研究雷達 資料待補',{cmd:'radar',tw:true,category:'incomplete'}],
+    ['台股找成長又便宜的股票',{cmd:'value',tw:true}],
+    ['我主要看台股',{cmd:'setpreference',tw:true}],
+    ['記住這檔',{cmd:'remember',ticker:'2330'}],
+    ['忘記偏好',{cmd:'forgetpreferences'}],
+    ['研究 台積電',{cmd:'researchstock',ticker:'2330'}],
+    ['查看解讀 2330',{cmd:'explanation',ticker:'2330'}],
+  ]) assert.deepEqual(await resolveInput(input,parseCommand,db,{ticker:'2330'},ALIASES),expected,input);
+  const notes=await resolveInput('筆記 2330 保留原句。',parseCommand,db,{},ALIASES);
+  assert.equal(notes.text,'保留原句。');
+  assert.equal((await resolveInput('請幫我筆記 2330 保留原句。',parseCommand,db,{},ALIASES)).text,'保留原句。');
+  assert.notEqual((await resolveInput('不要把台積電加入自選',parseCommand,{...db,get:async()=>[]},{},ALIASES)).cmd,'add');
+});
+
+test('only opted-in focus survives expired sessions; recent navigation takes priority',()=>{
+  const expired={market:'us',ticker:'AAPL',page:3,updated_at:'2020-01-01'};
+  assert.deepEqual(sessionWithPreferences(expired,{market:'tw',focus_ticker:'2330'}),{market:'tw',ticker:'2330',page:1});
+  assert.deepEqual(sessionWithPreferences(expired,{}),{market:'us',ticker:null,page:1});
+  assert.equal(sessionWithPreferences(null,{market:'us',focus_ticker:'2330'}).ticker,null);
+  const recent={...expired,updated_at:new Date().toISOString()};
+  assert.equal(sessionWithPreferences(recent,{market:'tw'}),recent);
+});
+
+test('preference writes are owner-scoped and clearing also resets navigation',async()=>{
+  const writes=[],prefs={...db,get:async()=>[{market:'tw',focus_ticker:'2330'}],send:async(...args)=>writes.push(args)};
+  await run({cmd:'forgetpreferences'},prefs,{eventTime:'2026-10-21T01:00:00Z'});
+  assert.deepEqual(writes[0][2],{user_id:'u1',market:'us',focus_ticker:null,updated_at:'2026-10-21T01:00:00Z'});
+  assert.deepEqual(nextSession({market:'tw',ticker:'2330',page:2},{cmd:'forgetpreferences'}),{market:'us',ticker:null,page:1});
 });
