@@ -175,7 +175,7 @@ def main(argv=None) -> int:
     failed = set()
     as_of = None
 
-    stages = [("public", run_public), ("formc", formc.run_formc), ("smart", smartmoney.run_smart), ("report", report.run_report), ("digest", digest.run_digest)]
+    stages = [("public", run_public), ("formc", formc.run_formc), ("smart", smartmoney.run_smart), ("report", report.run_report), ("digest", digest.run_digest_checked)]
     for name, fn in stages:
         if args.only and args.only != name:
             continue

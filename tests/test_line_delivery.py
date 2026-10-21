@@ -165,3 +165,27 @@ def test_us_uses_previous_snapshot_across_long_holiday_and_skips_stale(setup):
     assert digest.run_digest(store, DAY, 'us')['sent']
     assert 'AAA +20' in sent[0][0]
     assert not digest.run_digest(store, DAY + dt.timedelta(days=3), 'us')['sent']
+
+
+def test_production_entrypoint_fails_visibly_and_preserves_delivery_details(setup, monkeypatch, capsys):
+    store, sent = setup
+    monkeypatch.setattr(digest, 'send_line', lambda *a: (_ for _ in ()).throw(requests.Timeout('SECRET_PRIVATE_TEXT')))
+    with pytest.raises(digest.DeliveryFailure) as error:
+        digest.run_digest_checked(store, DAY, 'us')
+    assert error.value.stats['errors']['line'] == 'delivery_Timeout'
+    assert store.tables['line_deliveries'][0]['status'] == 'failed'
+    assert 'SECRET_PRIVATE_TEXT' not in capsys.readouterr().out
+    assert 'SECRET_PRIVATE_TEXT' not in str(error.value)
+    assert all(not a.get('fired_at') for a in store.tables['user_alerts'])
+
+
+def test_quota_limit_is_expected_but_unknown_quota_is_a_failure(setup, monkeypatch):
+    store, sent = setup
+    monkeypatch.setattr(digest, 'line_budget_ok', lambda _: (False, 'used 100 of ceiling 100'))
+    assert digest.run_digest_checked(store, DAY, 'us')['skipped'] == {'line': 'quota_limit'}
+    assert store.tables['line_deliveries'][0]['status'] == 'skipped'
+    monkeypatch.setattr(digest, 'line_budget_ok', lambda _: (False, 'quota check failed'))
+    with pytest.raises(digest.DeliveryFailure):
+        digest.run_digest_checked(store, DAY, 'us')
+    assert store.tables['line_deliveries'][0]['status'] == 'unknown'
+    assert not sent
