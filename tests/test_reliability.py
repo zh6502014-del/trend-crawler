@@ -36,6 +36,13 @@ def test_expired_cache_is_excluded_and_stale_data_is_labelled(cache, monkeypatch
     assert all('stale_fundamentals' in flags for flags in score.compute_scores(d)['flags'])
 
 
+def test_fundamentals_backlog_alone_does_not_fail_the_run():
+    backlog = {'refreshed': 400, 'failed': 0, 'aborted_rate_limit': False, 'deferred': 1436, 'expired': 0, 'stale': 788}
+    assert not run._fundamentals_needs_attention(backlog)
+    for key, value in [('failed', 1), ('expired', 3), ('aborted_rate_limit', True)]:
+        assert run._fundamentals_needs_attention({**backlog, key: value})
+
+
 def test_full_refresh_actually_refreshes_fresh_rows(cache, monkeypatch):
     monkeypatch.setattr(cfg, 'FULL_REFRESH', True)
     calls = []

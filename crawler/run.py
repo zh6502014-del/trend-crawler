@@ -47,6 +47,12 @@ def _prior_shares(store, as_of: dt.date) -> dict[str, float]:
     return out
 
 
+def _fundamentals_needs_attention(fstats: dict) -> bool:
+    """A refresh backlog (deferred) and stale-but-usable rows are routine and flagged per row;
+    only real fetch failures, rate-limit aborts or data past the maximum cache age make the run partial."""
+    return any(fstats.get(k) for k in ("failed", "expired", "aborted_rate_limit"))
+
+
 def run_public(store) -> dict:
     stats: dict = {"warnings": []}
     uni = universe.get_universe()
@@ -68,8 +74,8 @@ def run_public(store) -> dict:
     fund, fstats = fundamentals.refresh_cache(store, list(gate.index), ciks=ciks)
     stats["fundamentals"] = {**fstats, "usable": len(fund)}
     print(f"fundamentals: {stats['fundamentals']}")
-    if any(fstats.get(k) for k in ("failed", "expired", "stale", "deferred", "aborted_rate_limit")):
-        stats["warnings"].append("Fundamentals: failed, overdue or deferred refreshes; see source status")
+    if _fundamentals_needs_attention(fstats):
+        stats["warnings"].append("Fundamentals: failed refreshes or data past the maximum cache age; see source status")
 
     f = pd.DataFrame.from_dict(fund, orient="index")
     if f.empty:

@@ -27,7 +27,7 @@ MIN_DOLLAR_VOL = 300_000      # liquidity gate for the main board (and the 0-poi
 FUNDAMENTALS_TTL_DAYS = 7
 FUNDAMENTALS_MAX_AGE_DAYS = 21
 FULL_REFRESH = os.getenv("FULL_REFRESH") == "1"
-MAX_REFRESH_PER_RUN = int(os.getenv("MAX_REFRESH_PER_RUN", "400"))
+MAX_REFRESH_PER_RUN = int(os.getenv("MAX_REFRESH_PER_RUN", "1000"))  # ~3,400 gated names / 7-day TTL / 5 runs a week needs ~700
 if FULL_REFRESH:
     MAX_REFRESH_PER_RUN = 5000
 REQUEST_PAUSE = 0.15           # seconds between per-company SEC calls (SEC allows 10 req/s)
