@@ -92,8 +92,10 @@ test('same-day rerun replaces the cohort and late RPC retries cannot restore an 
 });
 
 test('an older concurrent batch cannot replace a newer publication for the same date', async () => {
-  const older = await stage(['OLD'], '2026-10-13', { created: '2026-10-18T00:00:00Z' });
-  const newer = await stage(['NEW'], '2026-10-13', { created: '2026-10-18T01:00:00Z' });
+  // Relative to now: publishing purges staging batches older than 7 days, so fixed dates expire.
+  const hoursAgo = (h) => new Date(Date.now() - h * 3600e3).toISOString();
+  const older = await stage(['OLD'], '2026-10-13', { created: hoursAgo(2) });
+  const newer = await stage(['NEW'], '2026-10-13', { created: hoursAgo(1) });
   await publish(newer);
   await assert.rejects(publish(older), /newer batch/);
   assert.deepEqual(await board(), [{ ticker: 'NEW', batch_id: newer }]);
