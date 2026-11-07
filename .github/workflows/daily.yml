@@ -14,6 +14,10 @@ on:
         description: "Refresh all fundamentals now (slow, use for the first run)"
         type: boolean
         default: false
+      from_cron:
+        description: "Set by the Supabase timer (pg_cron); skips the run if today's crawl already succeeded"
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # weekly heartbeat commit
@@ -38,12 +42,24 @@ jobs:
 
       - run: pip install -r crawler/requirements.txt
 
+      # Supabase pg_cron starts this run on time; GitHub's own schedule is a late backup. Either one skips
+      # when a full crawl already succeeded in the last 14 hours (crawler/schedule_guard.py).
+      - name: Skip if this slot's crawl already ran
+        id: guard
+        if: github.event_name == 'schedule' || inputs.from_cron
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python -m crawler.schedule_guard us
+
       - name: Verify crawler before using production credentials
+        if: steps.guard.outputs.skip != 'true'
         run: |
           pip install -r requirements-dev.txt
           python -m pytest -q
 
       - name: Run crawler
+        if: steps.guard.outputs.skip != 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -65,7 +81,7 @@ jobs:
       # GitHub pauses scheduled workflows in a repo with no activity for 60 days.
       # One tiny commit a week keeps it alive. (Check GitHub's current docs: the rule may change.)
       - name: Weekly heartbeat commit
-        if: success() && github.event_name == 'schedule'
+        if: success() && (github.event_name == 'schedule' || inputs.from_cron)
         run: |
           if [ "$(date -u +%u)" = "1" ]; then
             date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/heartbeat.txt

@@ -4,12 +4,18 @@ name: tw-crawl
 # The first run back-fills ~150 trading days of prices (about 20 minutes); later runs add one day.
 on:
   schedule:
+    # Supabase pg_cron dispatches this workflow at 15:45 Taipei (from_cron=true). These GitHub schedules are late
+    # backups (GitHub often starts them ~8 hours late); the guard skips them when the board is already in.
     - cron: "40 7 * * 1-5"    # 15:40 Taipei
-    - cron: "10 10 * * 1-5"   # 18:10 Taipei backup: GitHub can drop scheduled runs; skipped if 15:40 already ran
+    - cron: "10 10 * * 1-5"   # 18:10 Taipei
   workflow_dispatch:
     inputs:
       send_digest:
         description: "Send the Taiwan digest after crawling (leave off for deployment verification)"
+        type: boolean
+        default: false
+      from_cron:
+        description: "Set by the Supabase timer (pg_cron): guard against duplicates and send the digest"
         type: boolean
         default: false
 
@@ -33,9 +39,9 @@ jobs:
           cache: pip
           cache-dependency-path: crawler/requirements.txt
       - run: pip install -r crawler/requirements.txt -r requirements-dev.txt
-      - name: Skip the backup run if today's Taiwan board is already in
+      - name: Skip if the latest Taiwan session's board is already in
         id: guard
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || inputs.from_cron
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -49,7 +55,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python -m crawler.tw
       - name: Send Taiwan digest after a successful crawl
-        if: steps.guard.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.send_digest)
+        if: steps.guard.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.from_cron || inputs.send_digest)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

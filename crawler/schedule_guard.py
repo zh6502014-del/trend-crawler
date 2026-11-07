@@ -1,10 +1,11 @@
-"""Backup-schedule guard.
+"""Duplicate-run guard for the timed crawls.
 
-GitHub may delay or drop a scheduled workflow run under load (the Taiwan crawl's first scheduled run never fired).
-So the workflow also fires a later backup run; the backup asks this module whether today's data is already in and
-skips the crawl if it is. Manual runs never consult it. Any doubt (no credentials, network error) means "crawl".
+The crawls are started on time by Supabase pg_cron (workflow_dispatch with from_cron=true, see
+supabase/migrations/20261107_cron_dispatch.sql). GitHub's own schedules stay as a backup, but they run hours late
+or not at all. Every timed run (cron dispatch or GitHub schedule) asks this module whether the work is already done
+and skips if it is. Manual runs never consult it. Any doubt (no credentials, network error) means "crawl".
 
-python -m crawler.schedule_guard tw     → prints skip=true|false and appends it to $GITHUB_OUTPUT
+python -m crawler.schedule_guard tw|us   → prints skip=true|false and appends it to $GITHUB_OUTPUT
 """
 from __future__ import annotations
 
@@ -40,14 +41,28 @@ def tw_done(store, session: dt.date) -> bool:
     return bool(rows)
 
 
+US_RECENT = dt.timedelta(hours=14)  # a full US crawl that succeeded this recently covers today's slot
+
+
+def us_done(store, now: dt.datetime | None = None) -> bool:
+    """True when a full US crawl (it has the 'public' stage) finished OK within US_RECENT.
+
+    Runs with only one stage (e.g. a manual digest) don't count, and 'partial' runs don't either:
+    re-running after a partial run is how a rate-limited day gets repaired."""
+    since = (now or dt.datetime.now(dt.timezone.utc)) - US_RECENT
+    rows = store.select("crawl_runs", {"select": "id,finished_at,stats", "status": "eq.ok",
+                                       "finished_at": f"gte.{since.isoformat()}"})
+    return any(isinstance(r.get("stats"), dict) and r["stats"].get("public") for r in rows)
+
+
 def decide(market: str, store=None, now: dt.datetime | None = None) -> bool:
-    if market != "tw":
+    if market not in ("tw", "us"):
         return False
     try:
         if store is None:
             from .store import Supabase
             store = Supabase()
-        return tw_done(store, expected_session(now))
+        return us_done(store, now) if market == "us" else tw_done(store, expected_session(now))
     except Exception as e:  # noqa: BLE001 - never skip because the check itself failed
         print(f"  guard: check failed ({str(e)[:120]}), crawling anyway")
         return False
@@ -57,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     skip = decide(args[0] if args else "tw")
     line = f"skip={'true' if skip else 'false'}"
-    print(line + ("  (the latest Taiwan session's board is already in)" if skip else ""))
+    print(line + ("  (this slot's crawl already ran)" if skip else ""))
     out = os.getenv("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:

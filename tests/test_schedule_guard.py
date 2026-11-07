@@ -61,3 +61,38 @@ def test_backup_after_midnight_skips_when_board_is_in():
     late = dt.datetime(2026, 11, 6, 17, 26, tzinfo=dt.timezone.utc)   # what happened on 11/6
     assert g.decide("tw", Store([{"as_of": "2026-11-06"}]), late) is True
     assert g.decide("tw", Store([{"as_of": "2026-11-05"}]), late) is False
+
+
+class RunStore:
+    """crawl_runs with the status/finished_at filters the US guard sends."""
+    def __init__(self, runs):
+        self.runs, self.asked = runs, []
+
+    def select(self, table, params=None, page=1000):
+        self.asked.append((table, params))
+        assert table == "crawl_runs"
+        since = params["finished_at"][4:]
+        return [r for r in self.runs if r["status"] == params["status"][3:] and r["finished_at"] >= since]
+
+
+def test_us_guard_skips_only_after_a_recent_full_ok_run():
+    now = dt.datetime(2026, 11, 10, 2, 30, tzinfo=dt.timezone.utc)   # GitHub's late schedule, after the cron run
+    full = {"status": "ok", "finished_at": "2026-11-09T22:40:00+00:00", "stats": {"public": {"as_of": "2026-11-06"}}}
+    assert g.decide("us", RunStore([full]), now) is True
+    # a run that finished yesterday morning does not cover tonight's slot
+    old = {**full, "finished_at": "2026-11-09T08:00:00+00:00"}
+    assert g.decide("us", RunStore([old]), now) is False
+    # partial runs and single-stage manual runs (no 'public' stage) do not count
+    assert g.decide("us", RunStore([{**full, "status": "partial"}]), now) is False
+    assert g.decide("us", RunStore([{**full, "stats": {"digest": {"sent": True}}}]), now) is False
+    assert g.decide("us", RunStore([{**full, "stats": None}]), now) is False
+
+
+def test_us_guard_sends_a_bounded_query_and_crawls_on_doubt():
+    now = dt.datetime(2026, 11, 9, 21, 35, tzinfo=dt.timezone.utc)
+    st = RunStore([])
+    assert g.decide("us", st, now) is False
+    table, params = st.asked[0]
+    assert params["status"] == "eq.ok" and params["finished_at"] == "gte.2026-11-09T07:35:00+00:00"
+    assert g.decide("us", Store(fail=True), now) is False
+    assert g.decide("eu", RunStore([]), now) is False
