@@ -240,7 +240,7 @@ def run_digest(store, today: dt.date | None = None, market: str | None = None) -
     dates = []
     if market != "tw":
         dates = sorted({r["as_of"] for r in store.select("scores", {"select": "as_of", "as_of": f"gte.{(today - dt.timedelta(days=14)).isoformat()}", "rank": "eq.1", "board": "eq.main"})}, reverse=True)
-        if not dates or (today - dt.date.fromisoformat(str(dates[0])[:10])).days > 1:
+        if not dates or sessions_since(dt.date.fromisoformat(str(dates[0])[:10]), today) > US_MAX_SESSION_LAG:
             return {"sent": False, "reason": "no fresh US scores"}
         cols = "ticker,as_of,board,rank,score"
         cur = store.select("scores", {"select": cols, "as_of": f"eq.{dates[0]}", "board": "eq.main"})
@@ -332,6 +332,27 @@ def run_digest(store, today: dt.date | None = None, market: str | None = None) -
     return {"sent": bool(sent), "channels": sent, "errors": errors, "skipped": skipped}
 
 
+# The free price feed lags one session and GitHub often starts the run after midnight UTC,
+# so a fresh snapshot can be two weekdays old by the time the digest runs.
+US_MAX_SESSION_LAG = 2
+
+
+def sessions_since(as_of: dt.date, today: dt.date) -> int:
+    """Weekdays after `as_of` up to and including `today`."""
+    days = (today - as_of).days
+    return sum(1 for i in range(1, days + 1) if (as_of + dt.timedelta(days=i)).weekday() < 5) if days > 0 else 0
+
+
+def describe(result: dict) -> str:
+    if result.get("sent"):
+        return "sent via " + ", ".join(result.get("channels", []))
+    if result.get("errors"):
+        return "failed: " + ", ".join(f"{k}={v}" for k, v in result["errors"].items())
+    if result.get("skipped"):
+        return "skipped: " + ", ".join(f"{k}={v}" for k, v in result["skipped"].items())
+    return "not sent: " + result.get("reason", "no channel configured")
+
+
 class DeliveryFailure(RuntimeError):
     def __init__(self, stats):
         self.stats = stats
@@ -340,6 +361,7 @@ class DeliveryFailure(RuntimeError):
 
 def run_digest_checked(store, today=None, market=None):
     result = run_digest(store, today, market)
+    print(f"  digest: {describe(result)}")
     if result.get("errors"):
         raise DeliveryFailure(result)
     return result
@@ -347,4 +369,4 @@ def run_digest_checked(store, today=None, market=None):
 
 if __name__ == "__main__":
     from .store import Supabase
-    print(run_digest_checked(Supabase()))
+    run_digest_checked(Supabase())

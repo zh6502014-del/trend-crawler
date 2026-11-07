@@ -751,3 +751,14 @@ def test_run_digest_sends_one_message_with_both_markets(monkeypatch):
     msg = sent[0]
     assert "你設的提醒：2330 排名<=1" in msg and "【美股】" in msg and "【台股 2026-10-19】" in msg and "2330　分數 70→82" in msg
     assert st.updates and st.updates[0][1] == {"id": 1}          # the Taiwan alert is disarmed after sending
+
+
+def test_digest_freshness_counts_weekday_sessions():
+    from crawler import digest as dg
+    d = dt.date
+    assert dg.sessions_since(d(2026, 11, 5), d(2026, 11, 7)) == 1   # Thu data, Sat 01:00 UTC run
+    assert dg.sessions_since(d(2026, 11, 6), d(2026, 11, 10)) == 2  # Fri data, Tue run
+    assert dg.sessions_since(d(2026, 11, 3), d(2026, 11, 6)) == 3   # three sessions behind: stale
+    assert dg.sessions_since(d(2026, 11, 6), d(2026, 11, 6)) == 0
+    assert dg.describe({"sent": False, "reason": "nothing new"}) == "not sent: nothing new"
+    assert dg.describe({"sent": True, "channels": ["line"]}) == "sent via line"

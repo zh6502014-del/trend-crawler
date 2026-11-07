@@ -19,9 +19,24 @@ def taipei_today(now: dt.datetime | None = None) -> dt.date:
     return (now or dt.datetime.now(dt.timezone.utc)).astimezone(TAIPEI).date()
 
 
-def tw_done(store, today: dt.date) -> bool:
-    """True when the Taiwan main board already has a score row dated `today` (Taipei)."""
-    rows = store.select("tw_scores", {"select": "as_of", "as_of": f"eq.{today.isoformat()}", "board": "eq.tw_main", "rank": "eq.1"})
+TW_CLOSE_SETTLED = dt.time(14, 0)  # TWSE closes 13:30 Taipei; after 14:00 today's session counts
+
+
+def expected_session(now: dt.datetime | None = None) -> dt.date:
+    """The latest weekday session that has closed by `now` (Taipei).
+
+    GitHub often delays the scheduled runs by hours, so the backup can land after midnight;
+    comparing against the calendar date then would re-crawl a board that is already in."""
+    local = (now or dt.datetime.now(dt.timezone.utc)).astimezone(TAIPEI)
+    day = local.date() if local.time() >= TW_CLOSE_SETTLED else local.date() - dt.timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= dt.timedelta(days=1)
+    return day
+
+
+def tw_done(store, session: dt.date) -> bool:
+    """True when the Taiwan main board already has a score row for `session` or later."""
+    rows = store.select("tw_scores", {"select": "as_of", "as_of": f"gte.{session.isoformat()}", "board": "eq.tw_main", "rank": "eq.1"})
     return bool(rows)
 
 
@@ -32,7 +47,7 @@ def decide(market: str, store=None, now: dt.datetime | None = None) -> bool:
         if store is None:
             from .store import Supabase
             store = Supabase()
-        return tw_done(store, taipei_today(now))
+        return tw_done(store, expected_session(now))
     except Exception as e:  # noqa: BLE001 - never skip because the check itself failed
         print(f"  guard: check failed ({str(e)[:120]}), crawling anyway")
         return False
@@ -42,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     skip = decide(args[0] if args else "tw")
     line = f"skip={'true' if skip else 'false'}"
-    print(line + ("  (today's Taiwan board is already in)" if skip else ""))
+    print(line + ("  (the latest Taiwan session's board is already in)" if skip else ""))
     out = os.getenv("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:

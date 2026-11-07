@@ -16,8 +16,9 @@ class Store:
         self.asked.append((table, params))
         if self.fail:
             raise RuntimeError("network down")
-        want = (params or {}).get("as_of", "")[3:]
-        return [r for r in self.rows if r["as_of"] == want]
+        cond = (params or {}).get("as_of", "")
+        op, want = cond[:3], cond[4:]
+        return [r for r in self.rows if (r["as_of"] >= want if op == "gte" else r["as_of"] == want)]
 
 
 def test_taipei_date_rolls_over_at_16_utc():
@@ -46,3 +47,17 @@ def test_main_writes_github_output(tmp_path, monkeypatch):
     monkeypatch.setattr(g, "decide", lambda market: True)
     assert g.main(["tw"]) == 0
     assert out.read_text() == "skip=true\n"
+
+
+def test_expected_session_handles_late_runs_and_weekends():
+    utc = dt.timezone.utc
+    assert g.expected_session(dt.datetime(2026, 11, 6, 10, 10, tzinfo=utc)) == dt.date(2026, 11, 6)   # Fri 18:10
+    assert g.expected_session(dt.datetime(2026, 11, 6, 17, 26, tzinfo=utc)) == dt.date(2026, 11, 6)   # Sat 01:26 Taipei
+    assert g.expected_session(dt.datetime(2026, 11, 9, 1, 0, tzinfo=utc)) == dt.date(2026, 11, 6)     # Mon 09:00, before close
+    assert g.expected_session(dt.datetime(2026, 11, 9, 7, 40, tzinfo=utc)) == dt.date(2026, 11, 9)    # Mon 15:40
+
+
+def test_backup_after_midnight_skips_when_board_is_in():
+    late = dt.datetime(2026, 11, 6, 17, 26, tzinfo=dt.timezone.utc)   # what happened on 11/6
+    assert g.decide("tw", Store([{"as_of": "2026-11-06"}]), late) is True
+    assert g.decide("tw", Store([{"as_of": "2026-11-05"}]), late) is False
