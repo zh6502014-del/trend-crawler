@@ -59,7 +59,9 @@
 
 部署也會等待 GitHub Pages 更新登入頁，實測一次產生／交換短效 token（不寄信，僅登出該測試 session），然後更新 Bot，最後同步兩張 LINE 選單。同步直接上傳儲存庫內圖片，核對圖片雜湊、分頁 alias、預設與擁有者個人綁定，保留原本台股／美股選擇。相同內容重跑不重建，既有選單保留供回復，不會自動刪除。參考 [LINE 個人選單優先順序](https://developers.line.biz/en/docs/messaging-api/use-per-user-rich-menus/) 與 [Supabase token hash 驗證](https://supabase.com/docs/reference/javascript/auth-verifyotp)。
 
-美股原排程於台北時間週二至週六 05:30 開始爬蟲，完成後發美股摘要；台股於週一至週五 15:40 開始爬蟲，完成後發台股摘要。GitHub 排程可能延遲。沒有新快照或異動時不發送。
+推播時間由 Supabase pg_cron 準時啟動（`supabase/migrations/20261107_cron_dispatch.sql`）：台股週一至週五台北 15:45 觸發爬蟲，完成後約 16:30 前送台股摘要；美股週一至週五 21:35 UTC（台北隔天早上 05:35）觸發，完成後送美股摘要。GitHub 自己的排程常晚數小時，保留為備援；每次定時執行先跑 `crawler/schedule_guard.py`，當天已完成就跳過，摘要也有 delivery key 防重複。啟用前需建立只有 Actions 讀寫權限的 GitHub fine-grained token，存進 Supabase Vault（名稱 `github_dispatch_token`），再執行該 SQL；檢查方式寫在 SQL 檔開頭。沒有新快照或異動時不發送。
+
+摘要在 LINE 以一張 Flex 卡片呈現（仍算 1 則），標題、提醒、自選異動分段顯示，下方按鈕「今日」「自選」「開啟網頁」送出的是 Bot 指令，點了走免費的回覆訊息。卡片超過 25 KB 時改送純文字。Telegram 維持純文字。
 
 ### 選配 AI
 

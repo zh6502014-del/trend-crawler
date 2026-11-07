@@ -4,11 +4,14 @@ Production sends one digest per market snapshot, after each market crawl.
 Manual runs may use DIGEST_MARKET=both to combine the markets.
 
 Runs after the other stages. Requires LINE_CHANNEL_TOKEN/LINE_USER_ID or
-TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID. The message is plain text and short on purpose.
+TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID. The stored message is plain text (Telegram gets it as is); LINE gets the same
+text drawn as one Flex card with buttons, which still counts as one message. If the card would be too large, LINE
+falls back to plain text.
 """
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 import uuid
@@ -185,10 +188,71 @@ def line_messages(text: str) -> list[dict]:
     return chunks
 
 
-def send_line(text: str, token: str, user_id: str, retry_key: str | None = None) -> None:
+# ── LINE Flex card ─────────────────────────────────────────────────────────────
+# Colours match the bot's cards (supabase/functions/line-webhook/index.ts).
+_BG, _INK, _MUTED, _LINE, _ACCENT, _WARN = "#141a28", "#eef1f8", "#8a93a6", "#2a3142", "#6f86f2", "#f2b44a"
+FLEX_MAX_BYTES = 25_000  # LINE caps one bubble at 30 KB of JSON; stay well under it
+# Buttons send the same text as the bot's own menu, so tapping one is a free reply, not a push.
+_TODAY = {"us": ("美股今日", "美股 今日"), "tw": ("台股今日", "台股今日")}
+
+
+def _txt(text: str, **o) -> dict:
+    return {"type": "text", "text": text, "wrap": True, "size": "sm", "color": _INK, **o}
+
+
+def digest_flex(text: str, market: str | None = None) -> dict | None:
+    """The digest text as one Flex bubble: title, sections, buttons. None if it would be too large.
+
+    Pure and deterministic, so a retried delivery with the same stored text sends the same card."""
+    market = market if market in ("us", "tw") else "both"
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return None
+    head, rest = lines[0], [ln for ln in lines[1:] if not re.match(r"^https?://\S+$", ln.strip())]
+    day = head.replace("趨勢爬蟲", "").strip()
+    label = {"us": "美股", "tw": "台股", "both": "美股＋台股"}[market]
+    body = [
+        _txt("趨勢爬蟲 每日摘要", size="lg", weight="bold"),
+        _txt(f"{label}　{day}", size="xs", color=_MUTED),
+    ]
+    for ln in rest:
+        if ln.startswith("【"):  # market heading when both markets are in one message
+            body += [{"type": "separator", "margin": "lg", "color": _LINE}, _txt(ln.strip("【】"), weight="bold", color=_ACCENT, margin="md")]
+            continue
+        m = re.match(r"^([^：]{1,14})：(.*)$", ln)
+        if m:  # "標題：內容" (內容 may continue on the next lines, e.g. 自選異動)
+            color = _WARN if m.group(1).startswith("你設的提醒") else _ACCENT
+            body.append(_txt(m.group(1), weight="bold", color=color, size="xs", margin="lg"))
+            if m.group(2).strip():
+                body.append(_txt(m.group(2).replace("、", "　"), margin="xs"))
+        else:  # one watchlist line, e.g. "NRXS　分數 66→74"
+            body.append(_txt("・" + ln, margin="xs"))
+    buttons = [(*_TODAY[k],) for k in (("us", "tw") if market == "both" else (market,))]
+    buttons += [("自選", "自選"), ("開啟網頁", "儀表板")]
+    footer = {"type": "box", "layout": "horizontal", "spacing": "sm", "contents": [
+        {"type": "button", "style": "secondary", "height": "sm", "action": {"type": "message", "label": lbl, "text": cmd}}
+        for lbl, cmd in buttons[:4]]}
+    alt = (head + "　" + "　".join(rest))[:400]
+    msg = {"type": "flex", "altText": alt, "contents": {
+        "type": "bubble", "size": "mega",
+        "styles": {"body": {"backgroundColor": _BG}, "footer": {"backgroundColor": _BG}},
+        "body": {"type": "box", "layout": "vertical", "spacing": "none", "contents": body},
+        "footer": footer}}
+    if len(json.dumps(msg, ensure_ascii=False).encode("utf-8")) > FLEX_MAX_BYTES:
+        return None
+    return msg
+
+
+def line_payload(text: str, market: str | None = None) -> list[dict]:
+    """What the push request carries: the Flex card, or plain-text chunks when the card is too large."""
+    card = digest_flex(text, market or os.getenv("DIGEST_MARKET"))
+    return [card] if card else line_messages(text)
+
+
+def send_line(text: str, token: str, user_id: str, retry_key: str | None = None, market: str | None = None) -> None:
     headers = {"Authorization": f"Bearer {token}", "X-Line-Retry-Key": retry_key or str(uuid.uuid4())}
     r = requests.post("https://api.line.me/v2/bot/message/push", headers=headers,
-                      json={"to": user_id, "messages": line_messages(text)}, timeout=30)
+                      json={"to": user_id, "messages": line_payload(text, market)}, timeout=30)
     if r.status_code == 409 and r.headers.get("x-line-accepted-request-id"):
         return  # The exact same request was already accepted by LINE.
     r.raise_for_status()
