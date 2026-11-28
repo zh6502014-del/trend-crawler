@@ -211,3 +211,38 @@ def test_save_buckets_is_fail_soft():
     closes[dt.date(2026, 5, 3)] = closes[dt.date(2026, 5, 2)]
     assert report.compute_buckets(scores, closes, horizons=(1,))            # sanity: rows exist
     assert report.save_buckets(Broken(), scores, closes, "SPY", "us") == 0
+
+
+class _PrefStore:
+    """Only answers the line_preferences lookup; anything else would fail the test by raising."""
+    def __init__(self, rows=None, boom=False):
+        self.rows, self.boom, self.calls = rows or [], boom, []
+    def owner_id(self):
+        return "u1"
+    def select(self, table, params=None, page=1000):
+        self.calls.append(table)
+        if self.boom:
+            raise RuntimeError("db down")
+        assert table == "line_preferences", table
+        return self.rows
+
+
+def test_line_digest_switch_per_market_and_fail_open():
+    from crawler import digest
+    off_tw = _PrefStore([{"digest_tw": False}])
+    assert digest.line_digest_enabled(off_tw, "tw") is False
+    assert digest.line_digest_enabled(off_tw, "us") is True             # the other market is untouched
+    assert digest.line_digest_enabled(_PrefStore([{"digest_us": None}]), "us") is True
+    assert digest.line_digest_enabled(_PrefStore([]), "tw") is True       # no row yet = on
+    assert digest.line_digest_enabled(_PrefStore(boom=True), "tw") is True  # a database error never silences the digest
+    assert digest.line_digest_enabled(off_tw, "both") is True and off_tw.calls == ["line_preferences", "line_preferences"]
+
+
+def test_run_digest_stops_when_line_is_the_only_channel_and_it_is_off(monkeypatch):
+    from crawler import digest
+    monkeypatch.setenv("LINE_CHANNEL_TOKEN", "t"); monkeypatch.setenv("LINE_USER_ID", "U")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False); monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    st = _PrefStore([{"digest_tw": False}])
+    out = digest.run_digest(st, dt.date(2026, 11, 30), market="tw")
+    assert out == {"sent": False, "reason": "digest turned off for this market"}
+    assert st.calls == ["line_preferences"]                               # nothing else read, no alert consumed

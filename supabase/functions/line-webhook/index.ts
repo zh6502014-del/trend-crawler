@@ -69,7 +69,7 @@ const TW_QUICK = [qr("台股今日", "台股今日"), qr("台股榜單", "台股
 // rich menu cells, left→right, top→bottom. The image (docs/richmenu.png) is drawn by scripts/make_richmenu.py in the same order.
 const TICK = "(?:[A-Za-z][A-Za-z.\\-]{0,5}|\\d{4,6}[A-Za-z]?)";
 // words that start a command, for "did you mean" suggestions
-const COMMAND_WORDS = ["今日", "榜單", "自選", "週報", "大戶", "台股", "台股今日", "台股週報", "募資", "成績單", "提醒清單", "額度", "產業", "比較", "說明", "更多功能"];
+const COMMAND_WORDS = ["今日", "榜單", "自選", "週報", "大戶", "台股", "台股今日", "台股週報", "募資", "成績單", "提醒清單", "額度", "重要日期", "通知設定", "產業", "比較", "說明", "更多功能"];
 
 // ── name / alias lookup (stock names in the DB are mostly English; common Chinese names go here) ──
 export const ALIASES = {
@@ -117,6 +117,10 @@ export function parseCommand(raw) {
   if (/^(成績單|成績|report)$/.test(low)) return { cmd: "report" };
   if (/^(提醒清單|提醒列表|我的提醒|alerts)$/.test(low)) return { cmd: "alerts" };
   if (/^(額度|用量|quota)$/.test(low)) return { cmd: "quota" };
+  if (/^(重要日期|日期|日程|行事曆|calendar)$/.test(low)) return { cmd: "dates" };
+  if (/^(通知設定|推播設定|通知|推播)$/.test(low)) return { cmd: "notify" };
+  const nm = t.match(/^(開啟|打開|關閉)\s*(台股|美股)\s*(?:每日)?(?:通知|推播|摘要)$/);
+  if (nm) return { cmd: "setnotify", tw: nm[2] === "台股", on: nm[1] !== "關閉" };
   if (/^(今日|今天|today)$/.test(low)) return { cmd: "today" };
   if (/^(週報|周報|本週|week|weekly)$/.test(low)) return { cmd: "week" };
   let m = t.match(/^(刪提醒|刪除提醒|取消提醒)\s*((?:[A-Za-z][A-Za-z.\-]{0,5}|\d{4,6}[A-Za-z]?))$/);
@@ -384,6 +388,8 @@ export function helpText() {
     "解讀 NRXS　資料解讀；新話題　重設上下文",
     "提醒 NRXS　點選條件設提醒",
     "提醒清單／刪提醒 NRXS",
+    "重要日期　研究卡複查日與台股營收公告期限",
+    "通知設定／關閉台股通知／開啟美股通知　每日摘要開關",
     "",
     "【台股】",
     "2330／台積電　台股個股卡片",
@@ -411,6 +417,33 @@ export function suggest(text, words = COMMAND_WORDS) {
   return scored.slice(0, 4).map((x) => x.w);
 }
 
+// ── important dates: research-card review dates + the Taiwan monthly-revenue deadline ──
+// Listed Taiwan companies must publish last month's revenue by the 10th. US earnings dates are not in this
+// project's free data, so the card says so instead of guessing.
+const DAY = 86400000;
+const ymd = (t) => new Date(t).toISOString().slice(0, 10);
+export function nextRevenueDeadline(todayStr) {
+  const [y, m, d] = todayStr.split("-").map(Number);
+  const mk = (yy, mm) => `${yy}-${String(mm).padStart(2, "0")}-10`;
+  if (d <= 10) return mk(y, m);
+  return m === 12 ? mk(y + 1, 1) : mk(y, m + 1);
+}
+const diffDays = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / DAY);
+export function importantDates(cards, now = Date.now()) {
+  const today = ymd(now + 8 * 3600000); // Taipei date
+  const rows = (cards || []).filter((c) => c.review_on && c.status !== "rejected")
+    .map((c) => ({ ...c, left: diffDays(today, String(c.review_on).slice(0, 10)) })).sort((a, b) => a.left - b.left);
+  const label = (r) => `${r.ticker}　${String(r.review_on).slice(0, 10)}（${r.left < 0 ? `已逾期 ${-r.left} 天` : r.left === 0 ? "今天" : `${r.left} 天後`}）${r.next_step ? "　下一步：" + String(r.next_step).replace(/\s+/g, " ").slice(0, 30) : ""}`;
+  const late = rows.filter((r) => r.left < 0), soon = rows.filter((r) => r.left >= 0 && r.left <= 7), later = rows.filter((r) => r.left > 7 && r.left <= 30);
+  const dl = nextRevenueDeadline(today), dd = diffDays(today, dl);
+  const out = [`重要日期（台北時間 ${today}）`, "", `台股月營收：上市櫃公司須在每月 10 日前公布上月營收，下一個期限 ${dl}（${dd === 0 ? "今天" : dd + " 天後"}）。`];
+  const sec = (title, list) => { if (list.length) out.push("", title, ...list.slice(0, 8).map(label)); };
+  sec("研究卡已逾期複查", late); sec("7 天內要複查", soon); sec("30 天內要複查", later);
+  if (!late.length && !soon.length && !later.length) out.push("", rows.length ? "30 天內沒有要複查的研究卡。" : "研究卡還沒有設複查日。在儀表板的研究卡填「複查日」就會列在這裡。");
+  out.push("", "美股財報日沒有免費、穩定的資料來源，這裡不列；請看券商或公司公告。");
+  return out.join("\n");
+}
+
 export function moreCard(dash, oneTime = false, tw = false) {
   const btn = (label, text) => ({ type: "button", style: "secondary", height: "sm", flex: 1, action: { type: "message", label, text } });
   const pair = (a, b) => ({ type: "box", layout: "horizontal", spacing: "sm", contents: [a, b] });
@@ -424,7 +457,7 @@ export function moreCard(dash, oneTime = false, tw = false) {
     pair(btn("募資", "募資"), btn("成績單", "成績單")),
     pair(btn("提醒清單", "提醒清單"), btn("額度", "額度")),
     pair(btn("台股成績單", "台股成績單"), btn("台股產業", "台股產業")),
-    pair(btn("產業分布", "產業"), btn("全部指令", "說明")),
+    { type: "box", layout: "horizontal", spacing: "sm", contents: [btn("產業分布", "產業"), btn("重要日期", "重要日期"), btn("全部指令", "說明")] },
     ...(oneTime ? [txt("儀表板按鈕免登入，1 小時內有效、只能用一次。", { size: "xxs", color: "#8a93a6", margin: "md" })] : []),
   ];
   return flex("更多功能", bubble(body, dash ? [dashboardButton()] : null));
@@ -866,6 +899,34 @@ export async function run(cmd, db, ctx) {
       await db.send("DELETE", `user_alerts?user_id=eq.${uid}&ticker=eq.${enc(cmd.ticker)}`);
       return [{ type: "text", text: `已刪除 ${cmd.ticker} 的提醒。` }];
     }
+    case "dates": {
+      const uid = await db.ownerId();
+      const cards = await db.get(`research_cards?user_id=eq.${uid}&review_on=not.is.null&status=neq.rejected&select=ticker,market,review_on,status,next_step&order=review_on.asc&limit=100`).catch(() => []);
+      return [{ type: "text", text: importantDates(cards) }];
+    }
+    case "notify": {
+      const uid = await db.ownerId();
+      const p = (await db.get(`line_preferences?user_id=eq.${uid}&select=digest_us,digest_tw&limit=1`).catch(() => []))[0] || {};
+      const on = (v) => (v === false ? "關閉" : "開啟");
+      return withQuick([{ type: "text", text: [
+        "通知設定（LINE 每日摘要）",
+        `美股：${on(p.digest_us)}`,
+        `台股：${on(p.digest_tw)}`,
+        "",
+        "每個市場每天最多 1 則，收盤資料更新後才發；沒有新內容就不發。推播是固定一天一次，所以沒有另外設「安靜時段」。",
+        "關閉期間成立的提醒會保留，重新開啟後的下一次摘要才通知。若有設定 Telegram，關閉 LINE 後仍會送到 Telegram。",
+        "查詢和回覆不受影響。",
+      ].join("\n") }], [
+        qr(p.digest_us === false ? "開啟美股通知" : "關閉美股通知", (p.digest_us === false ? "開啟" : "關閉") + "美股通知"),
+        qr(p.digest_tw === false ? "開啟台股通知" : "關閉台股通知", (p.digest_tw === false ? "開啟" : "關閉") + "台股通知"),
+      ]);
+    }
+    case "setnotify": {
+      const uid = await db.ownerId();
+      const col = cmd.tw ? "digest_tw" : "digest_us", name = cmd.tw ? "台股" : "美股";
+      await db.send("POST", "line_preferences?on_conflict=user_id", { user_id: uid, [col]: cmd.on, updated_at: ctx.eventTime || new Date().toISOString() }, "resolution=merge-duplicates,return=minimal");
+      return withQuick([{ type: "text", text: cmd.on ? `已開啟${name}每日摘要，下一次收盤資料更新後會推播。` : `已關閉${name}每日摘要（LINE）。成立的提醒會保留，重新開啟後再通知。` }], [qr("通知設定", "通知設定")]);
+    }
     case "quota": return [{ type: "text", text: await ctx.quota() }];
     case "menu": return [{ type: "text", text: await ctx.setupMenu() }];
     default: {
@@ -893,7 +954,7 @@ export async function verifySignature(body, signature, secret) {
 
 export const TIMEOUT_MS = 8000; // reply tokens last ~1 minute; answer within 8s or say so
 const TIMEOUT = Symbol("timeout");
-const WRITE_CMDS = new Set(["add", "del", "note", "clearnote", "alert", "delalert", "menu", "setpreference", "remember", "forgetpreferences"]);
+const WRITE_CMDS = new Set(["add", "del", "note", "clearnote", "alert", "delalert", "menu", "setnotify", "setpreference", "remember", "forgetpreferences"]);
 export const timeoutText = (cmd) => WRITE_CMDS.has(cmd.cmd)
   ? "資料庫回應太慢（超過 8 秒）。這個操作可能已完成，請用「自選」、「我的筆記」、「提醒清單」或「我的設定」確認。"
   : "資料庫回應太慢（超過 8 秒），可能剛從休眠醒來。請再輸入一次。";

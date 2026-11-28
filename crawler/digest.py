@@ -338,6 +338,20 @@ def taiwan_section(store, today: dt.date, watch: list[str], alerts: list[dict]) 
     return ({"as_of": str(dates[0])[:10], "lines": lines} if lines else None), fired
 
 
+def line_digest_enabled(store, market: str) -> bool:
+    """False only when the owner switched this market's LINE digest off (line_preferences.digest_us / digest_tw).
+    Fail-open: a missing row, column or a database error keeps the digest on. Manual 'both' runs ignore the switch."""
+    if market not in ("us", "tw"):
+        return True
+    try:
+        owner = store.owner_id() if hasattr(store, "owner_id") else os.getenv("OWNER_UID")
+        scope = {"user_id": f"eq.{owner}"} if owner else {}
+        rows = store.select("line_preferences", {"select": f"digest_{market}", **scope})
+        return not (rows and rows[0].get(f"digest_{market}") is False)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def run_digest(store, today: dt.date | None = None, market: str | None = None) -> dict:
     """Split-market delivery in production; 'both' remains available for manual runs."""
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
@@ -348,6 +362,12 @@ def run_digest(store, today: dt.date | None = None, market: str | None = None) -
     market = market or os.getenv("DIGEST_MARKET", "both")
     if market not in ("us", "tw", "both"):
         raise ValueError("DIGEST_MARKET must be us, tw or both")
+    if use_line and not line_digest_enabled(store, market):
+        # The owner turned this market's LINE digest off from the chat. Telegram (if set up) still gets it, and
+        # alerts stay unfired until a channel actually delivers them.
+        use_line = False
+        if not use_tg:
+            return {"sent": False, "reason": "digest turned off for this market"}
     today = today or dt.datetime.now(dt.timezone.utc).date()
     owner = store.owner_id() if hasattr(store, "owner_id") else os.getenv("OWNER_UID")
     scope = {"user_id": f"eq.{owner}"} if owner else {}

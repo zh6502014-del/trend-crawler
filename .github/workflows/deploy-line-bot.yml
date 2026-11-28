@@ -62,11 +62,20 @@ jobs:
           args=("LINE_CHANNEL_SECRET=$LINE_CHANNEL_SECRET" "LINE_CHANNEL_TOKEN=$LINE_CHANNEL_TOKEN" "LINE_USER_ID=$LINE_USER_ID")
           args+=("OWNER_UID=$OWNER_UID" "LINE_MONTHLY_CAP=$LINE_MONTHLY_CAP" "LINE_AI_ENABLED=$LINE_AI_ENABLED" "LINE_AI_DAILY_LIMIT=$LINE_AI_DAILY_LIMIT" "GEMINI_MODEL=$GEMINI_MODEL" "GEMINI_API_KEY=$GEMINI_API_KEY")
           [ -z "$DASHBOARD_URL" ] || args+=("DASHBOARD_URL=$DASHBOARD_URL")
-          supabase secrets set "${args[@]}" --project-ref "$PROJECT_REF" --yes
+          # The Supabase management API occasionally answers 502; retry before failing the deploy.
+          for attempt in 1 2 3; do
+            supabase secrets set "${args[@]}" --project-ref "$PROJECT_REF" --yes && exit 0
+            [ "$attempt" = 3 ] || { echo "secrets set failed (attempt $attempt); retrying in 20s"; sleep 20; }
+          done
+          exit 1
       - name: Deploy function without JWT check (LINE signs its own requests)
         run: |
           [ -f supabase/config.toml ] || supabase init
-          supabase functions deploy line-webhook --project-ref "$PROJECT_REF" --no-verify-jwt --yes
+          for attempt in 1 2 3; do
+            supabase functions deploy line-webhook --project-ref "$PROJECT_REF" --no-verify-jwt --yes && exit 0
+            [ "$attempt" = 3 ] || { echo "function deploy failed (attempt $attempt); retrying in 20s"; sleep 20; }
+          done
+          exit 1
       - name: Synchronize and verify LINE rich menus
         env:
           LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}

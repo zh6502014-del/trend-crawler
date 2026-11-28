@@ -1,7 +1,7 @@
 // Run: node --test tests/line_webhook.test.mjs   (Node 22.18+ strips the .ts types natively)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText, dashLink, isTw, twd, MENU_TW, menuAreas, MENU_W, MENU_H, MENU_TAB_H } from "../supabase/functions/line-webhook/index.ts";
+import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText, dashLink, isTw, twd, MENU_TW, menuAreas, MENU_W, MENU_H, MENU_TAB_H, nextRevenueDeadline, importantDates } from "../supabase/functions/line-webhook/index.ts";
 
 const at = (iso) => new Date(iso);
 
@@ -402,4 +402,46 @@ test("report command reads the bucket table for the right market", async () => {
   assert.match(out[0].text, /^台股成績單：分數級距/);
   assert.ok(asked.some((p) => p.startsWith("score_bucket_card?market=eq.tw")));
   assert.ok(!asked.some((p) => p.startsWith("report_card?")));
+});
+
+test("important dates: command, Taipei date, overdue/soon buckets, revenue deadline, honest US note", async () => {
+  assert.equal(parseCommand("重要日期").cmd, "dates");
+  assert.equal(parseCommand("行事曆").cmd, "dates");
+  assert.equal(nextRevenueDeadline("2026-11-28"), "2026-12-10");
+  assert.equal(nextRevenueDeadline("2026-12-28"), "2027-01-10");
+  assert.equal(nextRevenueDeadline("2026-12-10"), "2026-12-10");
+  const now = Date.parse("2026-11-28T10:00:00Z"); // 18:00 in Taipei, still 11-28
+  const text = importantDates([
+    { ticker: "NRXS", review_on: "2026-11-25", status: "watching", next_step: "看財報" },
+    { ticker: "2330", review_on: "2026-12-02", status: "researching", next_step: "" },
+    { ticker: "AAPL", review_on: "2027-03-01", status: "watching" },
+    { ticker: "ZZZ", review_on: "2026-11-30", status: "rejected" },
+  ], now);
+  assert.match(text, /台北時間 2026-11-28/);
+  assert.match(text, /下一個期限 2026-12-10（12 天後）/);
+  assert.match(text, /已逾期複查\nNRXS　2026-11-25（已逾期 3 天）　下一步：看財報/);
+  assert.match(text, /7 天內要複查\n2330　2026-12-02（4 天後）/);
+  assert.doesNotMatch(text, /AAPL|ZZZ/);
+  assert.match(text, /美股財報日沒有免費/);
+  const empty = importantDates([], now);
+  assert.match(empty, /還沒有設複查日/);
+  const out = await run({ cmd: "dates" }, mkDb({ "research_cards": [{ ticker: "NRXS", review_on: "2026-11-29", status: "watching", next_step: "" }] }), {});
+  assert.match(out[0].text, /NRXS/);
+});
+
+test("notification switches: parse, show state, write only the chosen market's column", async () => {
+  assert.equal(parseCommand("通知設定").cmd, "notify");
+  assert.deepEqual(parseCommand("關閉台股通知"), { cmd: "setnotify", tw: true, on: false });
+  assert.deepEqual(parseCommand("開啟美股每日摘要"), { cmd: "setnotify", tw: false, on: true });
+  const db = mkDb({ "line_preferences": [{ digest_us: true, digest_tw: false }] });
+  const shown = await run({ cmd: "notify" }, db, {});
+  assert.match(shown[0].text, /美股：開啟\n台股：關閉/);
+  assert.match(shown[0].text, /沒有另外設「安靜時段」/);
+  assert.deepEqual(shown[0].quickReply.items.map((i) => i.action.text), ["關閉美股通知", "開啟台股通知"]);
+  const writes = []; const wdb = mkDb({}); wdb.send = async (m, p, b, pref) => writes.push({ m, p, b, pref });
+  const set = await run({ cmd: "setnotify", tw: true, on: false }, wdb, { eventTime: "2026-11-28T00:00:00Z" });
+  assert.match(set[0].text, /已關閉台股每日摘要/);
+  assert.equal(writes[0].p, "line_preferences?on_conflict=user_id");
+  assert.equal(writes[0].b.digest_tw, false); assert.ok(!("digest_us" in writes[0].b) && !("market" in writes[0].b));
+  assert.equal(writes[0].pref, "resolution=merge-duplicates,return=minimal");
 });
