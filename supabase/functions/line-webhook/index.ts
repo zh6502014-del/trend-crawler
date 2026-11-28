@@ -218,6 +218,50 @@ export const daysLeft = (d, now = Date.now()) => {
 // `days` calendar days older. Returns null when it cannot be done honestly (missing data, zero pillar, formula mismatch).
 export const CROWD_WEIGHT = 0.6;   // crawler/config.py CROWD_WEIGHT
 const PILLAR_FLOOR = 2;            // crawler/config.py FLOOR (0.02) on the 0–100 scale; the score clips each pillar to it
+// Report card: top-20 lists and score buckets, with sample sizes and honest caveats.
+const BUCKET_ORDER = ["80+", "70-79", "60-69", "<60"];
+export function reportSummary(rows, buckets, bench, pre = "") {
+  const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  const finite = (v) => v != null && isFinite(v);
+  const lines = [];
+  const cautions = [];
+  for (const h of [20, 5]) {
+    const rs = (rows || []).filter((r) => Number(r.horizon) === h);
+    const bs = (buckets || []).filter((r) => Number(r.horizon) === h);
+    if (!rs.length && !bs.length) continue;
+    const dates = new Set([...rs.map((r) => String(r.as_of).slice(0, 10)), ...bs.map((r) => String(r.as_of).slice(0, 10))]).size;
+    const benchAvg = mean(rs.map((r) => Number(r.spy_ret)).filter(finite));
+    lines.push(`【${h} 日後】樣本 ${dates} 個榜單日${dates < 20 ? "（樣本短）" : ""}`);
+    if (rs.length) {
+      const avg = mean(rs.map((r) => Number(r.avg_ret)).filter(finite));
+      const exc = mean(rs.map((r) => Number(r.excess)).filter(finite));
+      const hit = mean(rs.map((r) => Number(r.hit_rate)).filter(finite));
+      lines.push(`前 20 名　平均 ${pct(avg)}　${bench} ${pct(benchAvg)}　超額 ${pct(exc)}　勝率 ${pct(hit, false)}`);
+    }
+    const byBucket = new Map();
+    for (const r of bs) {
+      const n = Number(r.n) || 0;
+      if (!n) continue;
+      const b = byBucket.get(r.bucket) || { n: 0, ret: 0, bench: 0, hit: 0, days: 0 };
+      b.n += n; b.ret += n * Number(r.avg_ret); b.bench += n * Number(r.bench_ret); b.hit += n * Number(r.hit_rate); b.days += 1;
+      byBucket.set(r.bucket, b);
+    }
+    for (const name of BUCKET_ORDER) {
+      const b = byBucket.get(name);
+      if (!b) continue;
+      const avg = b.ret / b.n, ben = b.bench / b.n;
+      lines.push(`分數 ${name}　平均 ${pct(avg)}　超額 ${pct(avg - ben)}　勝率 ${pct(b.hit / b.n, false)}　${b.days} 日 ${b.n} 筆${b.n < 30 ? "（太少）" : ""}`);
+    }
+    lines.push("");
+    if (finite(benchAvg) && Math.abs(benchAvg) >= (h === 20 ? 0.03 : 0.015)) {
+      cautions.push(`${h} 日後：${bench}同期平均 ${pct(benchAvg)}，這段期間行情${benchAvg > 0 ? "偏多" : "偏空"}，各組都容易被大盤帶著走，看「超額」比看「平均」準。`);
+    }
+  }
+  if (!lines.length) return `${pre}成績單還沒有資料，要累積 5 個交易日以上。`;
+  const note = ["相鄰日的榜單高度重疊，同一檔會重複計入，獨立樣本比「筆數」少很多；高分組沒有明顯勝過低分組時，不代表分數沒用，也不代表有用，只是還看不出來。", ...cautions];
+  return `${pre}成績單：分數級距（主榜，每日收盤價）\n` + lines.join("\n").trimEnd() + "\n\n提醒：" + note.join("\n");
+}
+
 export function scoreDrivers(pts, days = 7, crowd = CROWD_WEIGHT) {
   if (!pts || pts.length < 2) return null;
   const cur = pts[pts.length - 1], cut = Date.parse(String(cur.as_of).slice(0, 10)) - days * 86400000;
@@ -756,10 +800,10 @@ export async function run(cmd, db, ctx) {
     }
     case "report": {
       const S = mk(cmd.tw), pre = cmd.tw ? "台股" : "";
-      const rows = await db.get(`${S.report}?order=as_of.desc,horizon.asc&limit=6`).catch(() => []);
+      const rows = await db.get(`${S.report}?order=as_of.desc,horizon.asc&limit=400`).catch(() => []);
       if (!rows.length) return [{ type: "text", text: `${pre}成績單還沒有資料，要累積 5 個交易日以上。` }];
-      const lines = rows.map((r) => `${r.as_of}　${r.horizon} 日　平均 ${pct(r.avg_ret)}　${S.bench} ${pct(r.spy_ret)}　超額 ${pct(r.excess)}　勝率 ${pct(r.hit_rate, false)}`);
-      return [{ type: "text", text: `${pre}前 20 名之後的表現：\n` + lines.join("\n") }];
+      const buckets = await db.get(`score_bucket_card?market=eq.${cmd.tw ? "tw" : "us"}&order=as_of.desc&limit=3000`).catch(() => []);
+      return [{ type: "text", text: reportSummary(rows, buckets, S.bench, pre) }];
     }
     case "today": {
       const S = mk(cmd.tw);

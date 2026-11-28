@@ -64,16 +64,74 @@ def compute_report(cohorts: dict, closes: dict, horizons=HORIZONS, boards: dict 
     return out
 
 
+BUCKETS = ((80, "80+"), (70, "70-79"), (60, "60-69"), (0, "<60"))  # score floor, label (highest first)
+
+
+def bucket_of(score) -> str | None:
+    try:
+        v = float(score)
+    except (TypeError, ValueError):
+        return None
+    if v != v:
+        return None
+    return next((label for floor, label in BUCKETS if v >= floor), BUCKETS[-1][1])
+
+
+def compute_buckets(scores: dict, closes: dict, horizons=HORIZONS, bench: str = "SPY", market: str = "us") -> list[dict]:
+    """scores: {as_of: {ticker: score}} for every main-board name that day. Groups them by score bucket and returns,
+    per (as_of, horizon, bucket), the equal-weight return, the benchmark's return over the same days, the hit rate
+    versus the benchmark and the count. A bucket needs at least 3 priced names. Pure."""
+    days = sorted(closes)
+    out = []
+    for as_of, board in sorted(scores.items()):
+        if as_of not in closes:
+            continue
+        i = days.index(as_of)
+        for h in horizons:
+            if i + h >= len(days):
+                continue
+            c0, c1 = closes[as_of], closes[days[i + h]]
+            if not c0.get(bench) or not c1.get(bench):
+                continue
+            b = c1[bench] / c0[bench] - 1
+            groups: dict[str, list[float]] = {}
+            for t, sc in board.items():
+                label = bucket_of(sc)
+                if label and c0.get(t) and c1.get(t):
+                    groups.setdefault(label, []).append(c1[t] / c0[t] - 1)
+            for label, rets in groups.items():
+                if len(rets) < 3:
+                    continue
+                out.append({"market": market, "as_of": as_of.isoformat(), "horizon": h, "bucket": label, "n": len(rets),
+                            "avg_ret": round(sum(rets) / len(rets), 4), "bench_ret": round(b, 4),
+                            "hit_rate": round(sum(1 for r in rets if r > b) / len(rets), 4)})
+    return out
+
+
+def save_buckets(store, scores: dict, closes: dict, bench: str, market: str) -> int:
+    """Needs migrations/20261128_score_bucket_card.sql; never fatal."""
+    try:
+        rows = compute_buckets(scores, closes, bench=bench, market=market)
+        if rows:
+            store.upsert("score_bucket_card", rows, "market,as_of,horizon,bucket")
+        return len(rows)
+    except Exception as e:  # noqa: BLE001
+        print(f"  report: score buckets skipped ({str(e)[:100]})")
+        return 0
+
+
 def run_report(store, today: dt.date | None = None) -> dict:
     today = today or dt.date.today()
     lo = (today - dt.timedelta(days=LOOKBACK_DAYS)).isoformat()
-    rows = store.select("scores", {"select": "ticker,as_of,rank", "board": "eq.main", "as_of": f"gte.{lo}"})
+    rows = store.select("scores", {"select": "ticker,as_of,rank,score", "board": "eq.main", "as_of": f"gte.{lo}"})
     rows.sort(key=lambda r: (str(r["as_of"]), r["rank"]))
     cohorts: dict[dt.date, list[str]] = {}
     boards: dict[dt.date, list[str]] = {}
+    board_scores: dict[dt.date, dict] = {}
     for r in rows:
         d = _d(r["as_of"])
         boards.setdefault(d, []).append(r["ticker"])
+        board_scores.setdefault(d, {})[r["ticker"]] = r.get("score")
         if r["rank"] <= TOP_N:
             cohorts.setdefault(d, []).append(r["ticker"])
     if not cohorts:
@@ -99,6 +157,7 @@ def run_report(store, today: dt.date | None = None) -> dict:
     else:
         closes = {_d(r["day"]): {t: v[0] for t, v in (r["bars"] or {}).items() if v and v[0] is not None} for r in pd_rows}
     out = compute_report(cohorts, closes, boards=boards)
+    buckets = save_buckets(store, board_scores, closes, "SPY", "us")
     if out:
         try:
             store.upsert("report_card", out, "as_of,horizon")
@@ -106,8 +165,8 @@ def run_report(store, today: dt.date | None = None) -> dict:
             print(f"  report: new columns missing ({str(e)[:80]}); saving basic fields. Run the latest schema.sql.")
             base = ("as_of", "horizon", "n", "avg_ret", "spy_ret", "excess", "hit_rate", "best", "best_ret", "worst", "worst_ret", "exit_day")
             store.upsert("report_card", [{k: r[k] for k in base} for r in out], "as_of,horizon")
-    print(f"  report: {len(cohorts)} cohorts, {len(out)} rows")
-    return {"cohorts": len(cohorts), "rows": len(out)}
+    print(f"  report: {len(cohorts)} cohorts, {len(out)} rows, {buckets} bucket rows")
+    return {"cohorts": len(cohorts), "rows": len(out), "bucket_rows": buckets}
 
 
 def run_tw_report(store, today: dt.date | None = None) -> dict:
@@ -115,13 +174,15 @@ def run_tw_report(store, today: dt.date | None = None) -> dict:
     from .tw import BENCH
     today = today or dt.date.today()
     lo = (today - dt.timedelta(days=LOOKBACK_DAYS)).isoformat()
-    rows = store.select("tw_scores", {"select": "ticker,as_of,rank", "board": "eq.tw_main", "as_of": f"gte.{lo}"})
+    rows = store.select("tw_scores", {"select": "ticker,as_of,rank,score", "board": "eq.tw_main", "as_of": f"gte.{lo}"})
     rows.sort(key=lambda r: (str(r["as_of"]), r["rank"]))
     cohorts: dict[dt.date, list[str]] = {}
     boards: dict[dt.date, list[str]] = {}
+    board_scores: dict[dt.date, dict] = {}
     for r in rows:
         d = _d(r["as_of"])
         boards.setdefault(d, []).append(r["ticker"])
+        board_scores.setdefault(d, {})[r["ticker"]] = r.get("score")
         if r["rank"] <= TOP_N:
             cohorts.setdefault(d, []).append(r["ticker"])
     if not cohorts:
@@ -130,7 +191,8 @@ def run_tw_report(store, today: dt.date | None = None) -> dict:
     pd_rows = store.select("tw_price_days", {"select": "day,bars", "day": f"gte.{min(cohorts).isoformat()}"}, page=10)
     closes = {_d(r["day"]): {t: v[0] for t, v in (r["bars"] or {}).items() if v and v[0] is not None} for r in pd_rows}
     out = compute_report(cohorts, closes, boards=boards, bench=BENCH)
+    buckets = save_buckets(store, board_scores, closes, BENCH, "tw")
     if out:
         store.upsert("tw_report_card", out, "as_of,horizon")
-    print(f"  tw report: {len(cohorts)} cohorts, {len(out)} rows")
-    return {"cohorts": len(cohorts), "rows": len(out)}
+    print(f"  tw report: {len(cohorts)} cohorts, {len(out)} rows, {buckets} bucket rows")
+    return {"cohorts": len(cohorts), "rows": len(out), "bucket_rows": buckets}

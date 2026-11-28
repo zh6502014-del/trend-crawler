@@ -371,3 +371,35 @@ test("stock card shows the drivers line only when given", () => {
   assert.equal(has(stockCard(s, null, "", { drivers: "7 日變化來源：成長 +4.0" })), true);
   assert.equal(has(stockCard(s, null, "", {})), false);
 });
+
+test("report summary: buckets with sample sizes and honest caveats", async () => {
+  const { reportSummary } = await import("../supabase/functions/line-webhook/index.ts");
+  const mk = (as_of, horizon, avg, spy) => ({ as_of, horizon, avg_ret: avg, spy_ret: spy, excess: avg - spy, hit_rate: 0.6 });
+  const rows = [mk("2026-10-01", 20, 0.05, 0.04), mk("2026-10-02", 20, 0.03, 0.04), mk("2026-10-01", 5, 0.01, 0.0)];
+  const b = (as_of, bucket, n, avg, bench) => ({ as_of, horizon: 20, bucket, n, avg_ret: avg, bench_ret: bench, hit_rate: 0.5 });
+  const buckets = [b("2026-10-01", "80+", 10, 0.06, 0.04), b("2026-10-02", "80+", 10, 0.02, 0.04), b("2026-10-01", "60-69", 40, 0.04, 0.04)];
+  const text = reportSummary(rows, buckets, "大盤", "台股");
+  assert.match(text, /^台股成績單：分數級距/);
+  assert.match(text, /【20 日後】樣本 2 個榜單日（樣本短）/);
+  assert.match(text, /前 20 名　平均 \+4%　大盤 \+4%/);
+  assert.match(text, /分數 80\+　平均 \+4%　超額 0%　勝率 50%　2 日 20 筆（太少）/);   // weighted by n, fewer than 30 rows
+  assert.match(text, /分數 60-69　平均 \+4%.*1 日 40 筆/);
+  assert.ok(!/60-69.*（太少）/.test(text));
+  assert.match(text, /【5 日後】樣本 1 個榜單日（樣本短）/);
+  assert.match(text, /20 日後：大盤同期平均 \+4%，這段期間行情偏多/);                   // |bench| >= 3% over 20 days
+  assert.match(text, /獨立樣本比「筆數」少很多/);
+  assert.equal(reportSummary([], [], "SPY", ""), "成績單還沒有資料，要累積 5 個交易日以上。");
+  const quiet = reportSummary([mk("2026-10-01", 20, 0.01, 0.0)], [], "SPY");
+  assert.ok(!/偏多|偏空/.test(quiet));
+});
+
+test("report command reads the bucket table for the right market", async () => {
+  const asked = [];
+  const rows = [{ as_of: "2026-10-01", horizon: 20, avg_ret: 0.02, spy_ret: 0.01, excess: 0.01, hit_rate: 0.5 }];
+  const db = mkDb({ "tw_report_card": rows, "score_bucket_card": [] });
+  const get = db.get; db.get = (p) => { asked.push(p); return get(p); };
+  const out = await run(parseCommand("台股成績單"), db, {});
+  assert.match(out[0].text, /^台股成績單：分數級距/);
+  assert.ok(asked.some((p) => p.startsWith("score_bucket_card?market=eq.tw")));
+  assert.ok(!asked.some((p) => p.startsWith("report_card?")));
+});

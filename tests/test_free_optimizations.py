@@ -159,3 +159,55 @@ def test_save_price_series_covers_main_board_and_is_fail_soft():
         def upsert(self, table, rows, on_conflict, chunk=500):
             raise RuntimeError('relation "tw_price_series" does not exist')
     assert tw.save_price_series(Broken(), _tw_hist(), scored) == 0   # table not created yet: the crawl goes on
+
+
+# ── report card by score bucket ─────────────────────────────────────────────
+
+def _bucket_closes():
+    import datetime as dt
+    d0, d1 = dt.date(2026, 5, 1), dt.date(2026, 5, 2)
+    c0 = {"SPY": 100.0, "A": 10.0, "B": 10.0, "C": 10.0, "D": 10.0, "E": 10.0, "F": 10.0}
+    c1 = {"SPY": 101.0, "A": 12.0, "B": 11.0, "C": 10.0, "D": 9.0, "E": 10.0, "F": 11.0}
+    return d0, {d0: c0, d1: c1}
+
+
+def test_bucket_of_edges():
+    from crawler import report
+    assert [report.bucket_of(x) for x in (95, 80, 79.9, 70, 60, 59.9, 0)] == ["80+", "80+", "70-79", "70-79", "60-69", "<60", "<60"]
+    assert report.bucket_of(None) is None and report.bucket_of(float("nan")) is None
+
+
+def test_compute_buckets_groups_by_score_and_skips_small_groups():
+    from crawler import report
+    d0, closes = _bucket_closes()
+    scores = {d0: {"A": 85, "B": 82, "C": 81, "D": 65, "E": 61, "F": 20}}   # 80+: A,B,C; 60-69: D,E (too few); <60: F (too few)
+    rows = report.compute_buckets(scores, closes, horizons=(1,), market="us")
+    assert len(rows) == 1
+    r = rows[0]
+    assert (r["market"], r["bucket"], r["horizon"], r["n"]) == ("us", "80+", 1, 3)
+    assert r["avg_ret"] == round((0.2 + 0.1 + 0.0) / 3, 4)
+    assert r["bench_ret"] == 0.01 and r["hit_rate"] == round(2 / 3, 4)       # A and B beat +1%, C did not
+
+
+def test_compute_buckets_needs_a_later_day_and_a_benchmark():
+    from crawler import report
+    d0, closes = _bucket_closes()
+    scores = {d0: {t: 85 for t in "ABCDEF"}}
+    assert report.compute_buckets(scores, closes, horizons=(5,)) == []             # exit day not available yet
+    assert report.compute_buckets(scores, closes, horizons=(1,), bench="NOPE") == []
+
+
+def test_save_buckets_is_fail_soft():
+    from crawler import report
+    from crawler.store import MemoryStore
+    d0, closes = _bucket_closes()
+    scores = {d0: {t: 85 for t in "ABCDEF"}}
+    st = MemoryStore()
+    assert report.save_buckets(st, scores, closes, "SPY", "us") == 0   # horizons 5/20 have no exit day: nothing to save
+    class Broken(MemoryStore):
+        def upsert(self, table, rows, on_conflict, chunk=500):
+            raise RuntimeError("relation score_bucket_card does not exist")
+    import datetime as dt
+    closes[dt.date(2026, 5, 3)] = closes[dt.date(2026, 5, 2)]
+    assert report.compute_buckets(scores, closes, horizons=(1,))            # sanity: rows exist
+    assert report.save_buckets(Broken(), scores, closes, "SPY", "us") == 0
