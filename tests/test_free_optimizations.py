@@ -70,3 +70,51 @@ def test_smart_money_history_keeps_only_active_tickers():
 
 def test_smart_money_history_never_breaks_the_crawl_before_the_migration():
     assert smartmoney.snapshot_history(FakeStore(fail=True), [{"ticker": "AAA", "score": 40}], dt.date(2026, 11, 27)) == 0
+
+
+# ── multi-signal flag and "new light" events ────────────────────────────────
+
+def test_confluence_needs_three_of_four_lights():
+    from crawler import tw
+    base = {"growth": 80.0, "validated": 75.0, "flags": []}
+    assert tw.confluence_lights(base) == ["growth", "validated"]
+    assert tw.confluence_lights({**base, "flags": ["rev_high"]}) == ["growth", "validated", "rev_high"]
+    assert tw.confluence_lights({"growth": 69.9, "validated": float("nan"), "flags": ["inst_buy"]}) == ["inst_buy"]
+    assert tw.confluence_lights({"growth": None, "validated": None, "flags": None}) == []
+
+
+def test_add_confluence_flags_only_qualifying_rows():
+    import pandas as pd
+    from crawler import tw
+    df = pd.DataFrame({
+        "growth": [80, 80, 50], "validated": [75, 40, 40],
+        "flags": [["rev_high"], ["inst_buy"], ["rev_high", "inst_buy"]],
+    }, index=["2330", "2317", "2454"])
+    out = tw.add_confluence(df)
+    assert out.loc["2330", "flags"] == ["rev_high", "multi_signal"]   # growth + validated + rev_high
+    assert out.loc["2317", "flags"] == ["inst_buy"]                   # growth + inst_buy only
+    assert out.loc["2454", "flags"] == ["rev_high", "inst_buy"]       # only two lights
+    assert df.loc["2330", "flags"] == ["rev_high"]                    # input untouched
+    again = tw.add_confluence(out)
+    assert again.loc["2330", "flags"].count("multi_signal") == 1
+
+
+def test_watch_lines_report_new_lights_only():
+    from crawler import digest
+    today = {"2330": {"score": 70, "board": "tw_main", "flags": ["inst_buy", "rev_high"]},
+             "2317": {"score": 60, "board": "tw_main", "flags": ["inst_buy"]},
+             "2454": {"score": 60, "board": "tw_main", "flags": ["inst_buy"]},
+             "2412": {"score": 60, "board": "tw_main", "flags": None}}
+    prev = {"2330": {"score": 70, "board": "tw_main", "flags": ["inst_buy"]},
+            "2317": {"score": 60, "board": "tw_main", "flags": ["inst_buy"]},
+            "2412": {"score": 60, "board": "tw_main", "flags": ["inst_buy"]}}
+    lines = digest.watch_lines(["2330", "2317", "2454", "2412"], today, prev, {})
+    assert lines == ["2330　新亮燈：營收創高"]  # 2317 unchanged, 2454 has no previous row, 2412 has no flags today
+
+
+def test_tw_lines_list_multi_signal_names_in_top20():
+    from crawler import digest
+    rows = [{"ticker": "2330", "name": "台積電", "board": "tw_main", "rank": 1, "score": 80, "flags": ["multi_signal"]},
+            {"ticker": "2317", "name": "鴻海", "board": "tw_main", "rank": 2, "score": 70, "flags": []}]
+    out = digest.tw_lines(rows, rows)
+    assert "前 20 名多訊號共振：2330台積電" in out

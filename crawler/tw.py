@@ -339,6 +339,30 @@ def compute_tw_scores(df: pd.DataFrame, max_main: int | None = None) -> pd.DataF
     return d
 
 
+CONFLUENCE_PILLAR = 70.0  # a pillar counts as a light at or above this (0-100)
+CONFLUENCE_MIN = 3        # lights needed (of 4) for the multi_signal flag
+
+
+def confluence_lights(r) -> list[str]:
+    """Which of the four lights a Taiwan row has: growth, validated, rev_high, inst_buy."""
+    flags = r.get("flags") or []
+    out = []
+    for k in ("growth", "validated"):
+        v = r.get(k)
+        if v is not None and v == v and float(v) >= CONFLUENCE_PILLAR:
+            out.append(k)
+    out += [k for k in ("rev_high", "inst_buy") if k in flags]
+    return out
+
+
+def add_confluence(df: pd.DataFrame) -> pd.DataFrame:
+    """Flag names where at least CONFLUENCE_MIN of the four lights are on (display only, never changes the score)."""
+    df = df.copy()
+    df["flags"] = [list(f) + ["multi_signal"] if len(confluence_lights(r)) >= CONFLUENCE_MIN and "multi_signal" not in f else list(f)
+                   for f, (_, r) in zip(df["flags"], df.iterrows())]
+    return df
+
+
 def run_tw(store, today: dt.date | None = None) -> dict:
     stats: dict = {}
     try:  # fail fast: do not spend 30 minutes fetching prices if the tables are not there
@@ -366,6 +390,7 @@ def run_tw(store, today: dt.date | None = None) -> dict:
     scored = tw_value.add_relative_value(scored)
     from . import tw_inst  # big-money signals: institutional flows, pledging, insider filings (never fatal)
     scored = tw_inst.enrich(store, scored, hist)
+    scored = add_confluence(scored)
     stats["main"] = int((scored["board"] == "tw_main").sum())
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     store.upsert("tw_entities", [

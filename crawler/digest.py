@@ -53,6 +53,16 @@ def check_alerts(alerts: list[dict], rows: dict) -> list[dict]:
     return hit
 
 
+LIGHTS = {"inst_buy": "法人買超", "rev_high": "營收創高", "multi_signal": "多訊號共振"}
+
+
+def new_lights(row: dict, prev: dict) -> list[str]:
+    """Display flags that are on today but were not on the previous snapshot. Needs both snapshots to carry flags."""
+    if not prev or prev.get("flags") is None or row.get("flags") is None:
+        return []
+    return [label for k, label in LIGHTS.items() if k in row["flags"] and k not in prev["flags"]]
+
+
 def watch_lines(watch: list[str], today: dict, prev: dict, smart: dict) -> list[str]:
     """One line per watchlist name that did something worth a message. today/prev: {ticker: row} on ANY board."""
     tags = {"insider_cluster": "內部人群買", "insider_buy": "內部人買進", "activist_13d": "13D", "new_5pct": "新5%持有人"}
@@ -67,6 +77,9 @@ def watch_lines(watch: list[str], today: dict, prev: dict, smart: dict) -> list[
             bits.append(f"分數 {p['score']:.0f}→{r['score']:.0f}")
         if p.get("board") and p["board"] != r.get("board"):
             bits.append("進入主榜" if r.get("board") in MAIN_BOARDS else "掉出主榜")
+        lit = new_lights(r, p)
+        if lit:
+            bits.append("新亮燈：" + "、".join(lit))
         sm = smart.get(t) or {}
         if (sm.get("score") or 0) > 0 and sm.get("tags"):
             bits.append("大戶：" + "/".join(tags.get(x, x) for x in sm["tags"]))
@@ -119,6 +132,9 @@ def tw_lines(today_rows: list[dict], prev_rows: list[dict], watch_msgs: list[str
     buy = sorted((r for r in top if "inst_buy" in (r.get("flags") or [])), key=lambda r: r["rank"])
     if buy:
         out.append("前 20 名法人買超：" + "、".join(f"{r['ticker']}{r.get('name') or ''}" for r in buy[:6]))
+    multi = sorted((r for r in top if "multi_signal" in (r.get("flags") or [])), key=lambda r: r["rank"])
+    if multi:
+        out.append("前 20 名多訊號共振：" + "、".join(f"{r['ticker']}{r.get('name') or ''}" for r in multi[:6]))
     return out
 
 

@@ -13,7 +13,7 @@ const env = (k) => (typeof Deno !== "undefined" ? Deno.env.get(k) : process.env[
 
 const TAGS = { insider_cluster: "內部人群買", insider_buy: "內部人買進", activist_13d: "13D 積極持有", new_5pct: "新增 5% 持有人" };
 const FLAGS = { short_runway: "現金撐不久", deep_loss: "虧損嚴重", high_debt: "高負債", dilution: "稀釋", thin_volume: "成交量薄",
-  micro_cap: "微型股", crowded: "擁擠", data_thin: "資料不足", high_pledge: "董監設質高", rev_high: "營收創高", insider_selling: "內部人申報轉讓" };
+  micro_cap: "微型股", crowded: "擁擠", data_thin: "資料不足", high_pledge: "董監設質高", rev_high: "營收創高", multi_signal: "多訊號共振", insider_selling: "內部人申報轉讓" };
 const COLORS = { growth: "#2fbf8f", validated: "#6f86f2", accessibility: "#f2b44a", attention: "#ee6a7b" };
 
 // ── formatting helpers ──────────────────────────────────────────────────────
