@@ -246,3 +246,11 @@ def test_run_digest_stops_when_line_is_the_only_channel_and_it_is_off(monkeypatc
     out = digest.run_digest(st, dt.date(2026, 11, 30), market="tw")
     assert out == {"sent": False, "reason": "digest turned off for this market"}
     assert st.calls == ["line_preferences"]                               # nothing else read, no alert consumed
+
+
+def test_digest_trust_buy_line_and_new_light():
+    rows = [{"ticker": "2330", "name": "台積電", "board": "tw_main", "rank": 1, "score": 80, "flags": ["trust_buy"]},
+            {"ticker": "2454", "name": "聯發科", "board": "tw_main", "rank": 2, "score": 70, "flags": []}]
+    out = digest.tw_lines(rows, rows)
+    assert any(x == "前 20 名投信連買：2330台積電" for x in out)
+    assert digest.new_lights({"flags": ["trust_buy"]}, {"flags": []}) == ["投信連買"]

@@ -53,7 +53,7 @@ def check_alerts(alerts: list[dict], rows: dict) -> list[dict]:
     return hit
 
 
-LIGHTS = {"inst_buy": "法人買超", "rev_high": "營收創高", "multi_signal": "多訊號共振"}
+LIGHTS = {"inst_buy": "法人買超", "trust_buy": "投信連買", "rev_high": "營收創高", "multi_signal": "多訊號共振"}
 
 
 def new_lights(row: dict, prev: dict) -> list[str]:
@@ -132,6 +132,9 @@ def tw_lines(today_rows: list[dict], prev_rows: list[dict], watch_msgs: list[str
     buy = sorted((r for r in top if "inst_buy" in (r.get("flags") or [])), key=lambda r: r["rank"])
     if buy:
         out.append("前 20 名法人買超：" + "、".join(f"{r['ticker']}{r.get('name') or ''}" for r in buy[:6]))
+    trust = sorted((r for r in top if "trust_buy" in (r.get("flags") or [])), key=lambda r: r["rank"])
+    if trust:
+        out.append("前 20 名投信連買：" + "、".join(f"{r['ticker']}{r.get('name') or ''}" for r in trust[:6]))
     multi = sorted((r for r in top if "multi_signal" in (r.get("flags") or [])), key=lambda r: r["rank"])
     if multi:
         out.append("前 20 名多訊號共振：" + "、".join(f"{r['ticker']}{r.get('name') or ''}" for r in multi[:6]))

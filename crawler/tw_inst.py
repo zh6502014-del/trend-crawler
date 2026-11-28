@@ -29,6 +29,7 @@ TPEX_XFER = ["https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap12_O"]
 
 KEEP_DAYS = 30           # trading days of flows we keep around (20 are used)
 BUY_20D = 0.10           # "法人買超": net buying over 20 days >= 10% of the traded volume (about the top quarter) ...
+TRUST_STREAK_MIN = 3     # "投信連買": the investment trusts were net buyers on this many trading days in a row, up to the latest
 PLEDGE_WARN = 0.30       # directors pledged >= 30% of what they hold
 XFER_WARN = 0.002        # insiders declared a transfer of >= 0.2% of the shares outstanding
 
@@ -133,8 +134,21 @@ def inst_frame(inst: dict, price_hist: dict) -> pd.DataFrame:
     d5, d20 = days[-5:], days[-20:]
     for c in codes:
         rows[c] = {"inst_5d": ratio(c, d5, 2), "inst_20d": ratio(c, d20, 2),
-                   "foreign_20d": ratio(c, d20, 0), "trust_20d": ratio(c, d20, 1)}
+                   "foreign_20d": ratio(c, d20, 0), "trust_20d": ratio(c, d20, 1),
+                   "trust_streak": trust_streak(inst, days, c)}
     return pd.DataFrame.from_dict(rows, orient="index")
+
+
+def trust_streak(inst: dict, days: list, code: str) -> int:
+    """Trading days in a row, counting back from the latest day in `days`, on which the investment trusts net bought `code`.
+    A day with no row for the code counts as no buying. Pure."""
+    n = 0
+    for d in reversed(days):
+        net = (inst.get(d, {}).get(code) or [0, 0, 0])[1]
+        if net is None or net <= 0:
+            break
+        n += 1
+    return n
 
 
 # ── pledging and insider transfer filings ───────────────────────────────────
@@ -195,11 +209,13 @@ def load_insider(session=None) -> tuple[dict, dict]:
 # ── glue ────────────────────────────────────────────────────────────────────
 
 def add_flags(df: pd.DataFrame) -> pd.DataFrame:
-    """Append inst_buy / high_pledge / insider_selling to the flags list (they do not change the score)."""
+    """Append inst_buy / trust_buy / high_pledge / insider_selling to the flags list (they do not change the score)."""
     def flags(r):
         f = list(r["flags"])
         if pd.notna(r.get("inst_20d")) and r["inst_20d"] >= BUY_20D and pd.notna(r.get("inst_5d")) and r["inst_5d"] > 0:
             f.append("inst_buy")
+        if pd.notna(r.get("trust_streak")) and r["trust_streak"] >= TRUST_STREAK_MIN:
+            f.append("trust_buy")
         if pd.notna(r.get("pledge_ratio")) and r["pledge_ratio"] >= PLEDGE_WARN:
             f.append("high_pledge")
         sh = r.get("shares_out")

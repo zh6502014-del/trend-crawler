@@ -173,3 +173,20 @@ def test_institutional_parsers_and_flags():
     assert abs(fr.loc["2330", "inst_20d"] - 0.1) < 1e-9
     df = pd.DataFrame({"flags": [[]], "inst_20d": [0.1], "inst_5d": [0.1], "pledge_ratio": [0.5], "xfer_shares": [5e6], "shares_out": [1e9]}, index=["2330"])
     assert set(tw_inst.add_flags(df).loc["2330", "flags"]) == {"inst_buy", "high_pledge", "insider_selling"}
+
+
+def test_trust_streak_and_flag():
+    from crawler import tw_inst
+    days = [dt.date(2026, 10, 1) + dt.timedelta(days=i) for i in range(6)]
+    nets = [50, -10, 30, 20, 10, 5]                       # buying again for the last four days
+    inst = {d: {"2330": [0, n, n], "2317": [0, 10, 10]} for d, n in zip(days, nets)}
+    inst[days[-1]].pop("2317")                            # no row on the latest day = no buying
+    assert tw_inst.trust_streak(inst, days, "2330") == 4
+    assert tw_inst.trust_streak(inst, days, "2317") == 0
+    assert tw_inst.trust_streak(inst, days, "9999") == 0
+    price = {d: {"2330": [1000.0, 1000, 1e6, None]} for d in days}
+    fr = tw_inst.inst_frame(inst, price)
+    assert fr.loc["2330", "trust_streak"] == 4
+    df = pd.DataFrame({"flags": [[], []], "trust_streak": [3, 2]}, index=["a", "b"])
+    out = tw_inst.add_flags(df)
+    assert out.loc["a", "flags"] == ["trust_buy"] and out.loc["b", "flags"] == []
