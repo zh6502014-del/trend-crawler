@@ -1,7 +1,7 @@
 // Run: node --test tests/line_webhook.test.mjs   (Node 22.18+ strips the .ts types natively)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText, dashLink, isTw, twd, MENU_TW, menuAreas, MENU_W, MENU_H, MENU_TAB_H, nextRevenueDeadline, importantDates } from "../supabase/functions/line-webhook/index.ts";
+import { parseCommand, dataAge, withQuick, run, findByName, timeoutText, stockCard, cleanQuery, suggest, MENU, helpText, dashLink, isTw, twd, MENU_TW, menuAreas, MENU_W, MENU_H, MENU_TAB_H, nextRevenueDeadline, importantDates, reportCard } from "../supabase/functions/line-webhook/index.ts";
 
 const at = (iso) => new Date(iso);
 
@@ -49,6 +49,8 @@ const mkDb = (tables) => ({
     return [];
   },
 });
+// every string a message shows, whether it is a plain text message or a Flex card (one line per text node)
+const allText = (m) => { const out = []; const walk = (n) => { if (Array.isArray(n)) n.forEach(walk); else if (n && typeof n === "object") { if (n.type === "text" && typeof n.text === "string") out.push(n.text); Object.values(n).forEach(walk); } }; walk(m); return out.join("\n"); };
 const board = { ticker: "NRXS", name: "Neuro Corp", score: 71.4, rank: 8, board: "main", as_of: "2026-10-15", growth: 50, validated: 50, accessibility: 50, attention: 50 };
 
 test("stock card: freshness line + quick replies reflect watch state", async () => {
@@ -109,7 +111,9 @@ test("alias to an unscored ticker does not loop", async () => {
 test("today/week show data age and warn when stale", async () => {
   const rows = [{ ticker: "A", score: 60, score_7d: 50, as_of: "2020-01-02" }];
   const wk = await run({ cmd: "week" }, mkDb({ "latest_board": rows, "user_watch": [] }), {});
-  assert.match(wk[0].text, /資料截至 2020-01-02（已落後/);
+  assert.equal(wk[0].type, "flex");
+  assert.match(allText(wk[0]), /資料截至 2020-01-02（已落後/);
+  assert.match(allText(wk[0]), /7 日漲最多\nA\n\+10\.0\n50→60/);
 });
 
 test("timeout texts differ for write vs read commands", () => {
@@ -314,9 +318,10 @@ test("Taiwan today/week/report use the tw tables and the market's own date rule"
   const db = mkDb({ "tw_scores?board=eq.tw_main&rank=eq.1": [{ as_of: "2026-10-16" }, { as_of: "2026-10-15" }], "tw_scores?as_of": [twRow], "user_watch": [], "tw_latest_board?board=eq.tw_main": [twRow], "tw_report_card": [] });
   const get = db.get; db.get = (p) => { asked.push(p); return get(p); };
   const today = await run(parseCommand("台股今日"), db, {});
-  assert.match(today[0].text, /^台股　資料截至 2026-10-16/);
+  assert.equal(today[0].type, "flex");
+  assert.match(allText(today[0]), /^台股今日變化\n資料截至 2026-10-16/);
   const week = await run(parseCommand("台股週報"), db, {});
-  assert.match(week[0].text, /台股週報/);
+  assert.match(allText(week[0]), /台股週報/);
   const rep = await run(parseCommand("台股成績單"), db, {});
   assert.match(rep[0].text, /台股成績單還沒有資料/);
   assert.ok(!asked.some((p) => /^(scores|latest_board|smart_money|fundraises|report_card)\?/.test(p)), "must not touch US tables");
@@ -399,7 +404,9 @@ test("report command reads the bucket table for the right market", async () => {
   const db = mkDb({ "tw_report_card": rows, "score_bucket_card": [] });
   const get = db.get; db.get = (p) => { asked.push(p); return get(p); };
   const out = await run(parseCommand("台股成績單"), db, {});
-  assert.match(out[0].text, /^台股成績單：分數級距/);
+  assert.equal(out[0].type, "flex");
+  assert.match(allText(out[0]), /^台股成績單\n/);
+  assert.match(allText(out[0]), /20 日後/);
   assert.ok(asked.some((p) => p.startsWith("score_bucket_card?market=eq.tw")));
   assert.ok(!asked.some((p) => p.startsWith("report_card?")));
 });
@@ -426,7 +433,14 @@ test("important dates: command, Taipei date, overdue/soon buckets, revenue deadl
   const empty = importantDates([], now);
   assert.match(empty, /還沒有設複查日/);
   const out = await run({ cmd: "dates" }, mkDb({ "research_cards": [{ ticker: "NRXS", review_on: "2026-11-29", status: "watching", next_step: "" }] }), {});
-  assert.match(out[0].text, /NRXS/);
+  assert.equal(out[0].type, "flex");
+  const t = allText(out[0]);
+  assert.match(t, /^重要日期\n台北時間 /);
+  assert.match(t, /7 天內要複查\nNRXS/);
+  assert.match(t, /台股月營收\n下一個公布期限/);
+  assert.match(t, /美股財報日沒有免費/);
+  const none = allText((await run({ cmd: "dates" }, mkDb({ "research_cards": [] }), {}))[0]);
+  assert.match(none, /研究卡還沒有設複查日/);
 });
 
 test("notification switches: parse, show state, write only the chosen market's column", async () => {
@@ -435,13 +449,43 @@ test("notification switches: parse, show state, write only the chosen market's c
   assert.deepEqual(parseCommand("開啟美股每日摘要"), { cmd: "setnotify", tw: false, on: true });
   const db = mkDb({ "line_preferences": [{ digest_us: true, digest_tw: false }] });
   const shown = await run({ cmd: "notify" }, db, {});
-  assert.match(shown[0].text, /美股：開啟\n台股：關閉/);
-  assert.match(shown[0].text, /沒有另外設「安靜時段」/);
-  assert.deepEqual(shown[0].quickReply.items.map((i) => i.action.text), ["關閉美股通知", "開啟台股通知"]);
+  assert.equal(shown[0].type, "flex");
+  assert.match(allText(shown[0]), /美股\n● 開啟\n台股\n● 關閉/);
+  assert.match(allText(shown[0]), /沒有另外設安靜時段/);
+  assert.deepEqual(shown[0].contents.footer.contents.map((b) => b.action.text), ["關閉美股通知", "開啟台股通知"]);
   const writes = []; const wdb = mkDb({}); wdb.send = async (m, p, b, pref) => writes.push({ m, p, b, pref });
   const set = await run({ cmd: "setnotify", tw: true, on: false }, wdb, { eventTime: "2026-11-28T00:00:00Z" });
   assert.match(set[0].text, /已關閉台股每日摘要/);
   assert.equal(writes[0].p, "line_preferences?on_conflict=user_id");
   assert.equal(writes[0].b.digest_tw, false); assert.ok(!("digest_us" in writes[0].b) && !("market" in writes[0].b));
   assert.equal(writes[0].pref, "resolution=merge-duplicates,return=minimal");
+});
+
+
+test("report card: aligned columns, signed colours, caveats for short samples and a one-sided market", () => {
+  const rows = [{ as_of: "2026-10-01", horizon: 20, avg_ret: 0.05, spy_ret: 0.04, excess: 0.01, hit_rate: 0.5 }];
+  const buckets = [{ as_of: "2026-10-01", horizon: 20, bucket: "80+", n: 4, avg_ret: 0.06, bench_ret: 0.04, hit_rate: 0.75 },
+                   { as_of: "2026-10-01", horizon: 20, bucket: "<60", n: 40, avg_ret: 0.01, bench_ret: 0.04, hit_rate: 0.3 }];
+  const card = reportCard(rows, buckets, "SPY", "");
+  const t = allText(card);
+  assert.match(t, /^成績單\n主榜分數級距，每日收盤價，基準 SPY\n20 日後\n1 個榜單日・樣本短/);
+  assert.match(t, /前 20 名\n\+5%\n\+1%\n50%/);
+  assert.match(t, /分數 <60\n\+1%\n-3%\n30%\n40/);
+  assert.match(t, /20 日後：SPY同期平均 \+4%，這段期間行情偏多/);
+  const json = JSON.stringify(card);
+  assert.ok(json.includes('"color":"#ee6a7b"') && json.includes('"color":"#2fbf8f"'), "negative excess is red, positive green");
+  assert.ok(json.includes('"color":"#f2b44a"'), "a bucket with fewer than 30 rows is flagged");
+  assert.equal(reportCard([], [], "SPY", "台股").text, "台股成績單還沒有資料，要累積 5 個交易日以上。");
+});
+
+test("alerts list and industry list are cards whose rows send the next command", async () => {
+  const al = await run({ cmd: "alerts" }, mkDb({ "user_alerts": [{ ticker: "NRXS", metric: "score", op: ">", value: 70, fired_at: null }, { ticker: "2330", metric: "rank", op: "<=", value: 5, fired_at: "2026-11-01" }] }), {});
+  assert.equal(al[0].type, "flex");
+  assert.match(allText(al[0]), /^我的提醒\n1 則待觸發，上限 20 則\nNRXS\n分數 > 70\n待觸發\n2330\n排名 <= 5\n已觸發/);
+  const sec = await run({ cmd: "industry", q: "" }, mkDb({ "latest_board": [{ sector: "Biotech" }, { sector: "Biotech" }, { sector: "Software" }] }), {});
+  assert.equal(sec[0].type, "flex");
+  assert.match(allText(sec[0]), /主榜產業分布\n點一列看該產業前 5 名\nBiotech\n2 檔\nSoftware\n1 檔/);
+  assert.ok(JSON.stringify(sec[0]).includes('"text":"產業 Biotech"'));
+  const none = await run({ cmd: "alerts" }, mkDb({ "user_alerts": [] }), {});
+  assert.match(none[0].text, /沒有提醒/);
 });

@@ -181,6 +181,19 @@ const tapRow = (left, mid, right, tapText) => ({
 
 const dataLine = (asOf, tw = false) => { const a = dataAge(asOf, new Date(), tw); return txt(a.label, { size: "xs", color: a.stale ? "#ee6a7b" : "#8a93a6", margin: "md" }); };
 
+// ── readable card helpers: titled sections, aligned columns, green/red numbers ──
+const UP = "#2fbf8f", DOWN = "#ee6a7b", MUTE = "#8a93a6", FG = "#eef1f8", WARN = "#f2b44a", RULE = "#2a3142";
+const signColor = (v) => (v == null || !isFinite(v) || Number(v) === 0 ? FG : Number(v) > 0 ? UP : DOWN);
+const rule = () => ({ type: "separator", margin: "md", color: RULE });
+const cells = (arr, o = {}) => ({ type: "box", layout: "horizontal", spacing: "sm", margin: "sm", contents: arr, ...o });
+const colCell = (t, o = {}) => txt(t, { size: "xs", flex: 2, align: "end", color: FG, ...o });
+const noteTxt = (t, o = {}) => txt(t, { size: "xxs", color: MUTE, margin: "md", ...o });
+const titleBlock = (title, subtitle) => [txt(title, { size: "lg", weight: "bold", color: FG }), ...(subtitle ? [txt(subtitle, { size: "xs", color: MUTE })] : [])];
+const sectionHead = (t, color = FG) => txt(t, { size: "sm", weight: "bold", color, margin: "lg" });
+const tapBox = (contents, text) => ({ type: "box", layout: "horizontal", spacing: "sm", margin: "sm", action: { type: "message", label: String(text).slice(0, 20), text }, contents });
+const footBtn = (label, text) => ({ type: "button", style: "secondary", height: "sm", margin: "sm", action: { type: "message", label: String(label).slice(0, 20), text } });
+
+
 export function deepLink(base, ticker) { return base ? base.replace(/\/?$/, "/") + "#t=" + encodeURIComponent(ticker) : ""; }
 
 export function stockCard(s, smart, dash, extra = {}) {
@@ -224,23 +237,19 @@ export const CROWD_WEIGHT = 0.6;   // crawler/config.py CROWD_WEIGHT
 const PILLAR_FLOOR = 2;            // crawler/config.py FLOOR (0.02) on the 0–100 scale; the score clips each pillar to it
 // Report card: top-20 lists and score buckets, with sample sizes and honest caveats.
 const BUCKET_ORDER = ["80+", "70-79", "60-69", "<60"];
-export function reportSummary(rows, buckets, bench, pre = "") {
+export function reportModel(rows, buckets) {
   const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
   const finite = (v) => v != null && isFinite(v);
-  const lines = [];
-  const cautions = [];
+  const horizons = [], cautions = [];
   for (const h of [20, 5]) {
     const rs = (rows || []).filter((r) => Number(r.horizon) === h);
     const bs = (buckets || []).filter((r) => Number(r.horizon) === h);
     if (!rs.length && !bs.length) continue;
     const dates = new Set([...rs.map((r) => String(r.as_of).slice(0, 10)), ...bs.map((r) => String(r.as_of).slice(0, 10))]).size;
     const benchAvg = mean(rs.map((r) => Number(r.spy_ret)).filter(finite));
-    lines.push(`【${h} 日後】樣本 ${dates} 個榜單日${dates < 20 ? "（樣本短）" : ""}`);
+    const H = { h, dates, short: dates < 20, benchAvg, top: null, buckets: [] };
     if (rs.length) {
-      const avg = mean(rs.map((r) => Number(r.avg_ret)).filter(finite));
-      const exc = mean(rs.map((r) => Number(r.excess)).filter(finite));
-      const hit = mean(rs.map((r) => Number(r.hit_rate)).filter(finite));
-      lines.push(`前 20 名　平均 ${pct(avg)}　${bench} ${pct(benchAvg)}　超額 ${pct(exc)}　勝率 ${pct(hit, false)}`);
+      H.top = { avg: mean(rs.map((r) => Number(r.avg_ret)).filter(finite)), exc: mean(rs.map((r) => Number(r.excess)).filter(finite)), hit: mean(rs.map((r) => Number(r.hit_rate)).filter(finite)) };
     }
     const byBucket = new Map();
     for (const r of bs) {
@@ -254,16 +263,46 @@ export function reportSummary(rows, buckets, bench, pre = "") {
       const b = byBucket.get(name);
       if (!b) continue;
       const avg = b.ret / b.n, ben = b.bench / b.n;
-      lines.push(`分數 ${name}　平均 ${pct(avg)}　超額 ${pct(avg - ben)}　勝率 ${pct(b.hit / b.n, false)}　${b.days} 日 ${b.n} 筆${b.n < 30 ? "（太少）" : ""}`);
+      H.buckets.push({ name, avg, exc: avg - ben, hit: b.hit / b.n, days: b.days, n: b.n, few: b.n < 30 });
     }
-    lines.push("");
-    if (finite(benchAvg) && Math.abs(benchAvg) >= (h === 20 ? 0.03 : 0.015)) {
-      cautions.push(`${h} 日後：${bench}同期平均 ${pct(benchAvg)}，這段期間行情${benchAvg > 0 ? "偏多" : "偏空"}，各組都容易被大盤帶著走，看「超額」比看「平均」準。`);
-    }
+    horizons.push(H);
+    if (finite(benchAvg) && Math.abs(benchAvg) >= (h === 20 ? 0.03 : 0.015)) cautions.push({ h, benchAvg, bullish: benchAvg > 0 });
   }
-  if (!lines.length) return `${pre}成績單還沒有資料，要累積 5 個交易日以上。`;
-  const note = ["相鄰日的榜單高度重疊，同一檔會重複計入，獨立樣本比「筆數」少很多；高分組沒有明顯勝過低分組時，不代表分數沒用，也不代表有用，只是還看不出來。", ...cautions];
+  return { horizons, cautions };
+}
+const REPORT_NOTE = "相鄰日的榜單高度重疊，同一檔會重複計入，獨立樣本比「筆數」少很多；高分組沒有明顯勝過低分組時，不代表分數沒用，也不代表有用，只是還看不出來。";
+const cautionText = (c, bench) => `${c.h} 日後：${bench}同期平均 ${pct(c.benchAvg)}，這段期間行情${c.bullish ? "偏多" : "偏空"}，各組都容易被大盤帶著走，看「超額」比看「平均」準。`;
+
+export function reportSummary(rows, buckets, bench, pre = "") {
+  const m = reportModel(rows, buckets);
+  if (!m.horizons.length) return `${pre}成績單還沒有資料，要累積 5 個交易日以上。`;
+  const lines = [];
+  for (const H of m.horizons) {
+    lines.push(`【${H.h} 日後】樣本 ${H.dates} 個榜單日${H.short ? "（樣本短）" : ""}`);
+    if (H.top) lines.push(`前 20 名　平均 ${pct(H.top.avg)}　${bench} ${pct(H.benchAvg)}　超額 ${pct(H.top.exc)}　勝率 ${pct(H.top.hit, false)}`);
+    for (const b of H.buckets) lines.push(`分數 ${b.name}　平均 ${pct(b.avg)}　超額 ${pct(b.exc)}　勝率 ${pct(b.hit, false)}　${b.days} 日 ${b.n} 筆${b.few ? "（太少）" : ""}`);
+    lines.push("");
+  }
+  const note = [REPORT_NOTE, ...m.cautions.map((c) => cautionText(c, bench))];
   return `${pre}成績單：分數級距（主榜，每日收盤價）\n` + lines.join("\n").trimEnd() + "\n\n提醒：" + note.join("\n");
+}
+
+export function reportCard(rows, buckets, bench, pre = "") {
+  const m = reportModel(rows, buckets);
+  if (!m.horizons.length) return { type: "text", text: `${pre}成績單還沒有資料，要累積 5 個交易日以上。` };
+  const body = titleBlock(`${pre}成績單`, `主榜分數級距，每日收盤價，基準 ${bench}`);
+  for (const H of m.horizons) {
+    body.push(rule(), cells([txt(`${H.h} 日後`, { size: "md", weight: "bold", color: FG, flex: 2 }),
+      txt(`${H.dates} 個榜單日${H.short ? "・樣本短" : ""}`, { size: "xs", align: "end", flex: 4, color: H.short ? WARN : MUTE })], { margin: "none" }));
+    body.push(cells([txt("組別", { size: "xxs", flex: 3, color: MUTE }), ...["平均", "超額", "勝率", "筆數"].map((t) => colCell(t, { size: "xxs", color: MUTE }))]));
+    if (H.top) body.push(cells([txt("前 20 名", { size: "xs", flex: 3, weight: "bold", color: FG }), colCell(pct(H.top.avg), { color: signColor(H.top.avg) }), colCell(pct(H.top.exc), { color: signColor(H.top.exc) }), colCell(pct(H.top.hit, false)), colCell("—", { color: MUTE })]));
+    for (const b of H.buckets) body.push(cells([txt(`分數 ${b.name}`, { size: "xs", flex: 3, color: FG }), colCell(pct(b.avg), { color: signColor(b.avg) }), colCell(pct(b.exc), { color: signColor(b.exc) }), colCell(pct(b.hit, false)), colCell(String(b.n), { color: b.few ? WARN : MUTE })]));
+    if (H.top) body.push(noteTxt(`${bench} 同期平均 ${pct(H.benchAvg)}`, { margin: "sm" }));
+  }
+  body.push(rule(), noteTxt("橘色筆數＝樣本太少（不到 30 筆），別當結論。", { margin: "none" }));
+  m.cautions.forEach((c) => body.push(noteTxt(cautionText(c, bench))));
+  body.push(noteTxt(REPORT_NOTE));
+  return flex(`${pre}成績單`, bubble(body));
 }
 
 export function scoreDrivers(pts, days = 7, crowd = CROWD_WEIGHT) {
@@ -429,19 +468,43 @@ export function nextRevenueDeadline(todayStr) {
   return m === 12 ? mk(y + 1, 1) : mk(y, m + 1);
 }
 const diffDays = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / DAY);
-export function importantDates(cards, now = Date.now()) {
+export function datesModel(cards, now = Date.now()) {
   const today = ymd(now + 8 * 3600000); // Taipei date
   const rows = (cards || []).filter((c) => c.review_on && c.status !== "rejected")
-    .map((c) => ({ ...c, left: diffDays(today, String(c.review_on).slice(0, 10)) })).sort((a, b) => a.left - b.left);
-  const label = (r) => `${r.ticker}　${String(r.review_on).slice(0, 10)}（${r.left < 0 ? `已逾期 ${-r.left} 天` : r.left === 0 ? "今天" : `${r.left} 天後`}）${r.next_step ? "　下一步：" + String(r.next_step).replace(/\s+/g, " ").slice(0, 30) : ""}`;
-  const late = rows.filter((r) => r.left < 0), soon = rows.filter((r) => r.left >= 0 && r.left <= 7), later = rows.filter((r) => r.left > 7 && r.left <= 30);
-  const dl = nextRevenueDeadline(today), dd = diffDays(today, dl);
-  const out = [`重要日期（台北時間 ${today}）`, "", `台股月營收：上市櫃公司須在每月 10 日前公布上月營收，下一個期限 ${dl}（${dd === 0 ? "今天" : dd + " 天後"}）。`];
-  const sec = (title, list) => { if (list.length) out.push("", title, ...list.slice(0, 8).map(label)); };
-  sec("研究卡已逾期複查", late); sec("7 天內要複查", soon); sec("30 天內要複查", later);
-  if (!late.length && !soon.length && !later.length) out.push("", rows.length ? "30 天內沒有要複查的研究卡。" : "研究卡還沒有設複查日。在儀表板的研究卡填「複查日」就會列在這裡。");
-  out.push("", "美股財報日沒有免費、穩定的資料來源，這裡不列；請看券商或公司公告。");
+    .map((c) => ({ ticker: c.ticker, date: String(c.review_on).slice(0, 10), next: c.next_step ? String(c.next_step).replace(/\s+/g, " ").slice(0, 30) : "", left: diffDays(today, String(c.review_on).slice(0, 10)) }))
+    .sort((a, b) => a.left - b.left);
+  const deadline = nextRevenueDeadline(today);
+  const groups = [["研究卡已逾期複查", DOWN, rows.filter((r) => r.left < 0)], ["7 天內要複查", WARN, rows.filter((r) => r.left >= 0 && r.left <= 7)], ["30 天內要複查", FG, rows.filter((r) => r.left > 7 && r.left <= 30)]]
+    .filter(([, , l]) => l.length).map(([title, tone, items]) => ({ title, tone, items: items.slice(0, 8) }));
+  return { today, deadline, toDeadline: diffDays(today, deadline), groups, hasCards: rows.length > 0 };
+}
+const leftText = (n) => (n < 0 ? `已逾期 ${-n} 天` : n === 0 ? "今天" : `${n} 天後`);
+const EMPTY_DATES = (m) => (m.hasCards ? "30 天內沒有要複查的研究卡。" : "研究卡還沒有設複查日。在儀表板的研究卡填「複查日」就會列在這裡。");
+const US_EARNINGS_NOTE = "美股財報日沒有免費、穩定的資料來源，這裡不列；請看券商或公司公告。";
+export function importantDates(cards, now = Date.now()) {
+  const m = datesModel(cards, now);
+  const out = [`重要日期（台北時間 ${m.today}）`, "", `台股月營收：上市櫃公司須在每月 10 日前公布上月營收，下一個期限 ${m.deadline}（${m.toDeadline === 0 ? "今天" : m.toDeadline + " 天後"}）。`];
+  for (const g of m.groups) out.push("", g.title, ...g.items.map((r) => `${r.ticker}　${r.date}（${leftText(r.left)}）${r.next ? "　下一步：" + r.next : ""}`));
+  if (!m.groups.length) out.push("", EMPTY_DATES(m));
+  out.push("", US_EARNINGS_NOTE);
   return out.join("\n");
+}
+export function datesCard(cards, now = Date.now()) {
+  const m = datesModel(cards, now);
+  const body = titleBlock("重要日期", `台北時間 ${m.today}`);
+  body.push(sectionHead("台股月營收"), cells([txt("下一個公布期限", { size: "sm", flex: 3, color: MUTE }), txt(`${m.deadline}`, { size: "sm", flex: 3, align: "end", weight: "bold", color: FG }),
+    txt(m.toDeadline === 0 ? "今天" : `${m.toDeadline} 天後`, { size: "sm", flex: 2, align: "end", color: m.toDeadline <= 3 ? WARN : FG })]),
+    noteTxt("上市櫃公司須在每月 10 日前公布上月營收。", { margin: "sm" }));
+  for (const g of m.groups) {
+    body.push(sectionHead(g.title, g.tone));
+    g.items.forEach((r) => {
+      body.push(tapBox([txt(r.ticker, { size: "sm", weight: "bold", flex: 3, color: FG }), colCell(r.date, { size: "xs", flex: 3, color: MUTE }), colCell(leftText(r.left), { size: "sm", flex: 3, color: g.tone })], r.ticker));
+      if (r.next) body.push(txt("下一步：" + r.next, { size: "xxs", color: MUTE }));
+    });
+  }
+  if (!m.groups.length) body.push(sectionHead("研究卡複查"), txt(EMPTY_DATES(m), { color: FG }));
+  body.push(rule(), noteTxt(US_EARNINGS_NOTE, { margin: "none" }));
+  return flex("重要日期", bubble(body));
 }
 
 export function moreCard(dash, oneTime = false, tw = false) {
@@ -516,40 +579,59 @@ function makeDb(fetchFn) {
 }
 
 // ── pure summaries (exported for tests) ─────────────────────────────────────
-export function todaySummary(cur, prev, watchRows, smart, raises) {
+export function todaySections(cur, prev, watchRows, smart, raises) {
   const c = new Map(cur.map((r) => [r.ticker, r])), p = new Map(prev.map((r) => [r.ticker, r]));
-  const lines = [];
+  const out = [];
   if (prev.length) {
     const entered = cur.filter((r) => r.rank <= 20 && !(p.get(r.ticker) && p.get(r.ticker).rank <= 20)).sort((a, b) => a.rank - b.rank);
-    if (entered.length) lines.push("新進前 20 名：" + entered.slice(0, 8).map((r) => `${r.ticker}（第${r.rank}名）`).join("、"));
+    if (entered.length) out.push({ label: "新進前 20 名", tone: UP, text: entered.slice(0, 8).map((r) => `${r.ticker}（第${r.rank}名）`).join("、") });
     const left = prev.filter((r) => r.rank <= 20 && !(c.get(r.ticker) && c.get(r.ticker).rank <= 20)).map((r) => r.ticker);
-    if (left.length) lines.push("掉出前 20 名：" + left.slice(0, 8).join("、"));
+    if (left.length) out.push({ label: "掉出前 20 名", tone: DOWN, text: left.slice(0, 8).join("、") });
     const jumps = cur.filter((r) => p.get(r.ticker) && r.score - p.get(r.ticker).score >= 8).sort((a, b) => (b.score - p.get(b.ticker).score) - (a.score - p.get(a.ticker).score)).slice(0, 5);
-    if (jumps.length) lines.push("分數大幅上升：" + jumps.map((r) => `${r.ticker} +${(r.score - p.get(r.ticker).score).toFixed(0)}`).join("、"));
+    if (jumps.length) out.push({ label: "分數大幅上升", tone: UP, text: jumps.map((r) => `${r.ticker} +${(r.score - p.get(r.ticker).score).toFixed(0)}`).join("、") });
   }
   const big = cur.filter((r) => r.rank <= 20 && smart[r.ticker]).slice(0, 6);
-  if (big.length) lines.push("前 20 名的大戶動向：" + big.map((r) => `${r.ticker}（${(smart[r.ticker].tags || []).map((t) => TAGS[t] || t).join("/")}）`).join("、"));
+  if (big.length) out.push({ label: "前 20 名的大戶動向", tone: FG, text: big.map((r) => `${r.ticker}（${(smart[r.ticker].tags || []).map((t) => TAGS[t] || t).join("/")}）`).join("、") });
   const wl = [];
   for (const r of watchRows.cur) {
     const q = watchRows.prev.find((x) => x.ticker === r.ticker);
     if (q && q.score != null && r.score != null && Math.abs(r.score - q.score) >= 5) wl.push(`${r.ticker} ${q.score.toFixed(0)}→${r.score.toFixed(0)}`);
     else if (q && q.board !== r.board) wl.push(`${r.ticker} ${r.board === "main" ? "進入主榜" : "掉出主榜"}`);
   }
-  if (wl.length) lines.push("自選異動：" + wl.join("、"));
-  if (raises.length) lines.push("新的 Reg CF 募資：" + raises.slice(0, 6).map((r) => r.issuer || "?").join("、"));
-  return lines;
+  if (wl.length) out.push({ label: "自選異動", tone: WARN, text: wl.join("、") });
+  if (raises.length) out.push({ label: "新的 Reg CF 募資", tone: FG, text: raises.slice(0, 6).map((r) => r.issuer || "?").join("、") });
+  return out;
+}
+export const todaySummary = (...a) => todaySections(...a).map((x) => `${x.label}：${x.text}`);
+
+export function todayCard(sections, head, tw = false) {
+  const body = titleBlock(tw ? "台股今日變化" : "今日變化", head);
+  if (!sections.length) body.push(rule(), txt("沒有明顯變化。", { color: FG, margin: "md" }));
+  sections.forEach((x) => body.push(sectionHead(x.label, x.tone), txt(x.text, { color: FG })));
+  return flex(tw ? "台股今日變化" : "今日變化", bubble(body));
 }
 
-export function weekSummary(rows, watch) {
+export function weekSections(rows, watch) {
   const ch = rows.filter((r) => r.score_7d != null && r.score != null).map((r) => ({ ...r, d: r.score - r.score_7d }));
-  const up = [...ch].sort((a, b) => b.d - a.d).slice(0, 5), down = [...ch].sort((a, b) => a.d - b.d).slice(0, 3);
-  const f = (r) => `${r.ticker} ${r.d >= 0 ? "+" : ""}${r.d.toFixed(1)}（${num(r.score_7d, 0)}→${num(r.score, 0)}）`;
-  const lines = [];
-  if (up.length) lines.push("7 日漲最多：\n" + up.filter((r) => r.d > 0).map(f).join("\n"));
-  if (down.length) lines.push("7 日跌最多：\n" + down.filter((r) => r.d < 0).map(f).join("\n"));
+  const up = [...ch].sort((a, b) => b.d - a.d).slice(0, 5).filter((r) => r.d > 0);
+  const down = [...ch].sort((a, b) => a.d - b.d).slice(0, 3).filter((r) => r.d < 0);
   const w = ch.filter((r) => watch.has(r.ticker)).sort((a, b) => b.d - a.d);
-  if (w.length) lines.push("自選 7 日：\n" + w.map(f).join("\n"));
-  return lines;
+  return [["7 日漲最多", up], ["7 日跌最多", down], ["自選 7 日", w]].filter(([, l]) => l.length)
+    .map(([title, items]) => ({ title, items: items.map((r) => ({ ticker: r.ticker, d: r.d, from: r.score_7d, to: r.score })) }));
+}
+const weekItemText = (r) => `${r.ticker} ${r.d >= 0 ? "+" : ""}${r.d.toFixed(1)}（${num(r.from, 0)}→${num(r.to, 0)}）`;
+export function weekSummary(rows, watch) {
+  return weekSections(rows, watch).map((s) => s.title + "：\n" + s.items.map(weekItemText).join("\n"));
+}
+export function weekCard(sections, head, age) {
+  const body = titleBlock(head, age);
+  sections.forEach((sec) => {
+    body.push(sectionHead(sec.title, sec.title === "7 日跌最多" ? DOWN : sec.title === "7 日漲最多" ? UP : FG));
+    sec.items.forEach((r) => body.push(tapBox([txt(r.ticker, { size: "sm", weight: "bold", flex: 3, color: FG }),
+      colCell(`${r.d >= 0 ? "+" : ""}${r.d.toFixed(1)}`, { size: "sm", color: signColor(r.d) }), colCell(`${num(r.from, 0)}→${num(r.to, 0)}`, { color: MUTE })], r.ticker)));
+  });
+  body.push(noteTxt("點一列看個股卡片。"));
+  return flex(head, bubble(body));
 }
 
 // name search: alias table first, then company-name substring; returns messages, or null when nothing matches
@@ -813,13 +895,17 @@ export async function run(cmd, db, ctx) {
       return [flex("大戶訊號", bubble(body))];
     }
     case "industry": {
-      const S = mk(cmd.tw), hint = cmd.tw ? "台股產業 半導體" : "產業 生技", pre = cmd.tw ? "台股" : "";
+      const S = mk(cmd.tw), pre = cmd.tw ? "台股" : "";
       if (!cmd.q) {
         const rows = await db.get(`${S.view}?board=eq.${S.main}&select=sector&limit=1000`);
         const c = {};
         rows.forEach((r) => { if (r.sector) c[r.sector] = (c[r.sector] || 0) + 1; });
-        const list = Object.entries(c).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}（${v}）`).join("\n");
-        return [{ type: "text", text: `${pre}主榜產業分布：\n` + list + `\n\n輸入「${hint}」看該產業前 5 名。` }];
+        const all = Object.entries(c).sort((a, b) => b[1] - a[1]), list = all.slice(0, 24);
+        if (!list.length) return [{ type: "text", text: `${pre}主榜目前沒有產業資料。` }];
+        const body = titleBlock(`${pre}主榜產業分布`, "點一列看該產業前 5 名");
+        list.forEach(([k, v]) => body.push(tapBox([txt(k, { size: "sm", flex: 6, color: FG }), colCell(`${v} 檔`, { size: "sm", flex: 2 })], `${pre}產業 ${k}`)));
+        if (all.length > list.length) body.push(noteTxt(`只列檔數最多的 ${list.length} 個產業，其他請輸入「${pre}產業 關鍵字」。`));
+        return [flex(`${pre}主榜產業分布`, bubble(body))];
       }
       const rows = await db.get(`${S.view}?board=eq.${S.main}&sector=ilike.*${enc(cmd.q)}*&order=rank.asc&limit=5`);
       if (!rows.length) return [{ type: "text", text: `${pre}主榜裡沒有符合「${cmd.q}」的產業。輸入「${pre}產業」看清單。` }];
@@ -836,7 +922,7 @@ export async function run(cmd, db, ctx) {
       const rows = await db.get(`${S.report}?order=as_of.desc,horizon.asc&limit=400`).catch(() => []);
       if (!rows.length) return [{ type: "text", text: `${pre}成績單還沒有資料，要累積 5 個交易日以上。` }];
       const buckets = await db.get(`score_bucket_card?market=eq.${cmd.tw ? "tw" : "us"}&order=as_of.desc&limit=3000`).catch(() => []);
-      return [{ type: "text", text: reportSummary(rows, buckets, S.bench, pre) }];
+      return [reportCard(rows, buckets, S.bench, pre)];
     }
     case "today": {
       const S = mk(cmd.tw);
@@ -862,8 +948,9 @@ export async function run(cmd, db, ctx) {
         const since = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
         raises = await db.get(`fundraises?filed_at=gte.${since}&form_type=eq.C&select=issuer&limit=6`);
       }
-      const lines = todaySummary(cur, prev, wr, sm, raises);
-      return withQuick([{ type: "text", text: `${cmd.tw ? "台股　" : ""}${dataAge(dates[0], new Date(), !!cmd.tw).label}${dates[1] ? "（對比 " + String(dates[1]).slice(0, 10) + "）" : ""}\n` + (lines.length ? lines.join("\n") : "沒有明顯變化。") }],
+      const secs = todaySections(cur, prev, wr, sm, raises);
+      const head = `${dataAge(dates[0], new Date(), !!cmd.tw).label}${dates[1] ? "（對比 " + String(dates[1]).slice(0, 10) + "）" : ""}`;
+      return withQuick([todayCard(secs, head, !!cmd.tw)],
         cmd.tw ? [qr("台股週報", "台股週報"), qr("自選", "自選"), qr("台股榜單", "台股"), qr("美股今日", "今日")] : [qr("週報", "週報"), qr("自選", "自選"), qr("榜單", "榜單"), qr("台股今日", "台股今日")]);
     }
     case "week": {
@@ -871,10 +958,10 @@ export async function run(cmd, db, ctx) {
       const rows = await db.get(`${S.view}?board=eq.${S.main}&select=ticker,score,score_7d,as_of&limit=1000`);
       const uid = await db.ownerId();
       const w = new Set((await db.get(`user_watch?user_id=eq.${uid}&select=ticker`)).map((x) => x.ticker).filter((t) => isTw(t) === !!cmd.tw));
-      const lines = weekSummary(rows, w);
+      const secs = weekSections(rows, w);
       const age = dataAge(rows[0] && rows[0].as_of, new Date(), !!cmd.tw).label;
       const head = `${cmd.tw ? "台股" : ""}週報（主榜 7 日分數變化）`;
-      return withQuick([{ type: "text", text: lines.length ? head + "\n" + age + "\n\n" + lines.join("\n\n") : "還沒有 7 日前的資料可以比。" }],
+      return withQuick([secs.length ? weekCard(secs, head, age) : { type: "text", text: "還沒有 7 日前的資料可以比。" }],
         cmd.tw ? [qr("台股今日", "台股今日"), qr("自選", "自選"), qr("台股榜單", "台股"), qr("美股週報", "週報")] : [qr("今日", "今日"), qr("自選", "自選"), qr("榜單", "榜單"), qr("台股週報", "台股週報")]);
     }
     case "alert": {
@@ -892,7 +979,11 @@ export async function run(cmd, db, ctx) {
       const uid = await db.ownerId();
       const rows = await db.get(`user_alerts?user_id=eq.${uid}&order=created_at.asc&select=ticker,metric,op,value,fired_at`);
       if (!rows.length) return [{ type: "text", text: "沒有提醒。例：提醒 NRXS 分數>70" }];
-      return [{ type: "text", text: "提醒：\n" + rows.map((r) => `${r.fired_at ? "✓已觸發" : "待觸發"}　${r.ticker} ${r.metric === "score" ? "分數" : "排名"}${r.op}${r.value}`).join("\n") }];
+      const body = titleBlock("我的提醒", `${rows.filter((r) => !r.fired_at).length} 則待觸發，上限 20 則`);
+      rows.forEach((r) => body.push(tapBox([txt(r.ticker, { size: "sm", weight: "bold", flex: 3, color: FG }), colCell(`${r.metric === "score" ? "分數" : "排名"} ${r.op} ${r.value}`, { size: "sm", flex: 4 }),
+        colCell(r.fired_at ? "已觸發" : "待觸發", { flex: 3, color: r.fired_at ? MUTE : WARN })], r.ticker)));
+      body.push(noteTxt("條件以收盤後更新的分數判斷，成立時放進該市場下一次摘要，只通知一次。刪除請傳「刪提醒 代號」。"));
+      return [flex("我的提醒", bubble(body))];
     }
     case "delalert": {
       const uid = await db.ownerId();
@@ -902,24 +993,20 @@ export async function run(cmd, db, ctx) {
     case "dates": {
       const uid = await db.ownerId();
       const cards = await db.get(`research_cards?user_id=eq.${uid}&review_on=not.is.null&status=neq.rejected&select=ticker,market,review_on,status,next_step&order=review_on.asc&limit=100`).catch(() => []);
-      return [{ type: "text", text: importantDates(cards) }];
+      return [datesCard(cards)];
     }
     case "notify": {
       const uid = await db.ownerId();
       const p = (await db.get(`line_preferences?user_id=eq.${uid}&select=digest_us,digest_tw&limit=1`).catch(() => []))[0] || {};
-      const on = (v) => (v === false ? "關閉" : "開啟");
-      return withQuick([{ type: "text", text: [
-        "通知設定（LINE 每日摘要）",
-        `美股：${on(p.digest_us)}`,
-        `台股：${on(p.digest_tw)}`,
-        "",
-        "每個市場每天最多 1 則，收盤資料更新後才發；沒有新內容就不發。推播是固定一天一次，所以沒有另外設「安靜時段」。",
-        "關閉期間成立的提醒會保留，重新開啟後的下一次摘要才通知。若有設定 Telegram，關閉 LINE 後仍會送到 Telegram。",
-        "查詢和回覆不受影響。",
-      ].join("\n") }], [
-        qr(p.digest_us === false ? "開啟美股通知" : "關閉美股通知", (p.digest_us === false ? "開啟" : "關閉") + "美股通知"),
-        qr(p.digest_tw === false ? "開啟台股通知" : "關閉台股通知", (p.digest_tw === false ? "開啟" : "關閉") + "台股通知"),
-      ]);
+      const state = (v) => txt(v === false ? "● 關閉" : "● 開啟", { size: "sm", flex: 2, align: "end", weight: "bold", color: v === false ? MUTE : UP });
+      const body = [...titleBlock("通知設定", "LINE 每日摘要"),
+        rule(), cells([txt("美股", { size: "md", flex: 3, color: FG }), state(p.digest_us)], { margin: "md" }), cells([txt("台股", { size: "md", flex: 3, color: FG }), state(p.digest_tw)]),
+        rule(), noteTxt("每個市場每天最多 1 則，收盤資料更新後才發，沒有新內容就不發。推播固定一天一次，所以沒有另外設安靜時段。", { margin: "none" }),
+        noteTxt("關閉期間成立的提醒會保留，重新開啟後的下一次摘要才通知。若有設定 Telegram，關閉 LINE 後仍會送到 Telegram。"),
+        noteTxt("查詢和回覆不受影響。")];
+      const foot = [footBtn(p.digest_us === false ? "開啟美股通知" : "關閉美股通知", (p.digest_us === false ? "開啟" : "關閉") + "美股通知"),
+        footBtn(p.digest_tw === false ? "開啟台股通知" : "關閉台股通知", (p.digest_tw === false ? "開啟" : "關閉") + "台股通知")];
+      return [flex("通知設定", bubble(body, foot))];
     }
     case "setnotify": {
       const uid = await db.ownerId();
