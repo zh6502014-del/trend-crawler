@@ -62,11 +62,11 @@ jobs:
           args=("LINE_CHANNEL_SECRET=$LINE_CHANNEL_SECRET" "LINE_CHANNEL_TOKEN=$LINE_CHANNEL_TOKEN" "LINE_USER_ID=$LINE_USER_ID")
           args+=("OWNER_UID=$OWNER_UID" "LINE_MONTHLY_CAP=$LINE_MONTHLY_CAP" "LINE_AI_ENABLED=$LINE_AI_ENABLED" "LINE_AI_DAILY_LIMIT=$LINE_AI_DAILY_LIMIT" "GEMINI_MODEL=$GEMINI_MODEL" "GEMINI_API_KEY=$GEMINI_API_KEY")
           [ -z "$DASHBOARD_URL" ] || args+=("DASHBOARD_URL=$DASHBOARD_URL")
-          supabase secrets set "${args[@]}" --project-ref "$PROJECT_REF"
+          supabase secrets set "${args[@]}" --project-ref "$PROJECT_REF" --yes
       - name: Deploy function without JWT check (LINE signs its own requests)
         run: |
           [ -f supabase/config.toml ] || supabase init
-          supabase functions deploy line-webhook --project-ref "$PROJECT_REF" --no-verify-jwt
+          supabase functions deploy line-webhook --project-ref "$PROJECT_REF" --no-verify-jwt --yes
       - name: Synchronize and verify LINE rich menus
         env:
           LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
