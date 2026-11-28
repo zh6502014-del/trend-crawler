@@ -56,6 +56,19 @@ end $$;
 grant select on public.tw_entities, public.tw_signals, public.tw_scores to authenticated;
 grant all on public.tw_entities, public.tw_signals, public.tw_scores, public.tw_price_days to service_role;
 
+-- Last ~130 closes per Taiwan name for the detail chart (like public.price_series for the US).
+-- Overwritten every run; not a history table. Safe to re-run.
+create table if not exists public.tw_price_series (
+  ticker     text primary key,
+  updated_at timestamptz not null default now(),
+  series     jsonb not null           -- [["2026-10-14", 612.5], ...]
+);
+alter table public.tw_price_series enable row level security;
+drop policy if exists read_authenticated on public.tw_price_series;
+create policy read_authenticated on public.tw_price_series for select to authenticated using (true);
+grant select on public.tw_price_series to authenticated;
+grant all on public.tw_price_series to service_role;
+
 -- Report card for the Taiwan board (benchmark = TWSE weighted index; spy_ret holds the index return)
 create table if not exists public.tw_report_card (as_of date not null, horizon int not null, n int, avg_ret numeric, spy_ret numeric, excess numeric, hit_rate numeric, best text, best_ret numeric, worst text, worst_ret numeric, exit_day date, top10_ret numeric, board_ret numeric, edge_board numeric, primary key (as_of, horizon));
 alter table public.tw_report_card enable row level security;

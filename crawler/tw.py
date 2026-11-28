@@ -363,6 +363,35 @@ def add_confluence(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+PRICE_SERIES_TOP_N = 400   # best-scoring names (plus the whole main board) that get a stored price series
+PRICE_SERIES_DAYS = 130
+
+
+def price_series(hist: dict, tickers, days: int = PRICE_SERIES_DAYS) -> list[dict]:
+    """{day: bars} -> [{ticker, updated_at, series: [[iso day, close], ...]}] for the last `days` trading days. Pure."""
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    recent = sorted(hist)[-days:]
+    out = []
+    for t in tickers:
+        pts = [[d.isoformat(), round(float(hist[d][t][0]), 4)] for d in recent if t in hist[d] and hist[d][t] and hist[d][t][0] is not None]
+        if len(pts) >= 2:
+            out.append({"ticker": t, "updated_at": now, "series": pts})
+    return out
+
+
+def save_price_series(store, hist: dict, scored: pd.DataFrame) -> int:
+    """Store the detail-chart series. Needs migrations/20261128_tw_price_series.sql; never fatal."""
+    try:
+        top = set(scored.sort_values("score", ascending=False).head(PRICE_SERIES_TOP_N).index)
+        top |= set(scored.index[scored["board"] == "tw_main"])
+        rows = price_series(hist, sorted(top))
+        store.upsert("tw_price_series", rows, "ticker")
+        return len(rows)
+    except Exception as e:  # noqa: BLE001
+        print(f"  tw price series skipped: {str(e)[:120]}")
+        return 0
+
+
 def run_tw(store, today: dt.date | None = None) -> dict:
     stats: dict = {}
     try:  # fail fast: do not spend 30 minutes fetching prices if the tables are not there
@@ -419,6 +448,7 @@ def run_tw(store, today: dt.date | None = None) -> dict:
          "growth": r["growth"], "validated": r["validated"], "accessibility": r["accessibility"],
          "attention": r["attention"], "flags": list(r["flags"])} for t, r in scored.iterrows()], "ticker,as_of")
     print(f"  tw: wrote {len(scored)} scores ({stats['main']} main)")
+    stats["price_series"] = save_price_series(store, hist, scored)
     try:  # the report card is a bonus: never fail the crawl over it (e.g. tw_report_card not created yet)
         from .report import run_tw_report
         stats["report"] = run_tw_report(store, today)

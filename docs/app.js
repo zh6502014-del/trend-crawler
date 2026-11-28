@@ -860,6 +860,8 @@
       <div class="d-section"><h3>風險標記</h3>${f.length
         ? `<ul class="flag-list">${f.map((x) => `<li><span class="chip ${FLAGS[x].tone}">${esc(FLAGS[x].label)}</span><span>${esc(FLAGS[x].help)}</span></li>`).join('')}</ul>`
         : '<p class="chart-note">沒有觸發任何標記，不代表沒有風險。</p>'}</div>
+      <div class="d-section"><h3>分數走勢</h3><div id="chart-score" class="chart-box"><p class="chart-note">載入中…</p></div></div>
+      <div class="d-section"><h3 id="price-heading">近半年股價</h3><div id="chart-price" class="chart-box"><p class="chart-note">載入中…</p></div></div>
       <div class="d-section"><h3>資料來源</h3>
         <p class="chart-note">股價與成交值：證交所與櫃買中心每日收盤行情。營收：公開資訊觀測站的月營收與歷史月報。歷史可能經過修正，取得日期不等於當時公告日期；不直接用於無前視偏誤回測。市值是收盤價乘以發行股數。</p>
         <p class="chart-note">營收月份 ${esc(d.revenue_as_of?.slice(0,7) || '待更新')} · 歷史最近取得 ${esc(d.revenue_observed_at?.slice(0,10) || '未記錄')} · 評分版本 ${esc(d.scoring_version || '舊版代理指標')}</p>
@@ -876,6 +878,10 @@
     Research.mountCard($('#research-card'), d, d.board?.startsWith('tw') ? 'tw' : 'us', state.sb);
     showDrawer();
     drawRadar(d);
+    loadStockCharts(d.ticker, TW_CHARTS).catch((e) => {
+      if (state.current !== d.ticker) return;
+      for (const id of ['#chart-score', '#chart-price']) $(id).innerHTML = `<p class="chart-note">圖表載入失敗：${esc(e?.message || e)}</p>`;
+    });
   }
 
   function applyTwFilters() {
@@ -1152,11 +1158,13 @@
     box.innerHTML = head + tr + hd + '<p class="chart-note">內部人買賣是公開申報，不等於看好；多人同時買進比單人買進更有參考價值。</p>';
   }
 
-  async function loadStockCharts(ticker) {
+  const US_CHARTS = { scores: 'scores', prices: 'price_series', note: '只會保存分數前 250 名的走勢。' };
+  const TW_CHARTS = { scores: 'tw_scores', prices: 'tw_price_series', note: '只保存主榜與分數前 400 名的走勢。' };
+  async function loadStockCharts(ticker, src = US_CHARTS) {
     const sb = state.sb;
     const [hist, px] = await Promise.all([
-      sb.from('scores').select('as_of,score,growth,validated,accessibility,attention').eq('ticker', ticker).order('as_of', { ascending: false }).limit(600),
-      sb.from('price_series').select('series,updated_at').eq('ticker', ticker).maybeSingle(),
+      sb.from(src.scores).select('as_of,score,growth,validated,accessibility,attention').eq('ticker', ticker).order('as_of', { ascending: false }).limit(600),
+      sb.from(src.prices).select('series,updated_at').eq('ticker', ticker).maybeSingle(),
     ]);
     if (state.current !== ticker) return;  // the user already opened something else
 
@@ -1198,7 +1206,7 @@
     const series = px.data?.series;
     if (series?.length) $('#price-heading').textContent = `近半年股價（截至 ${series[series.length - 1][0]}）`;
     if (px.error) pbox.innerHTML = `<p class="chart-note">${esc(px.error.message)}</p>`;
-    else if (!series || series.length < 2) pbox.innerHTML = '<p class="chart-note">沒有價格走勢。只會保存分數前 250 名的走勢。</p>';
+    else if (!series || series.length < 2) pbox.innerHTML = `<p class="chart-note">沒有價格走勢。${esc(src.note)}</p>`;
     else {
       pbox.innerHTML = '<canvas aria-label="股價走勢圖" role="img"></canvas>';
       state.charts.push(new Chart($('canvas', pbox), {

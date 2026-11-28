@@ -118,3 +118,44 @@ def test_tw_lines_list_multi_signal_names_in_top20():
             {"ticker": "2317", "name": "鴻海", "board": "tw_main", "rank": 2, "score": 70, "flags": []}]
     out = digest.tw_lines(rows, rows)
     assert "前 20 名多訊號共振：2330台積電" in out
+
+
+# ── Taiwan price series for the detail chart ────────────────────────────────
+
+def _tw_hist(n=140):
+    import datetime as dt
+    days = [dt.date(2026, 1, 1) + dt.timedelta(days=i) for i in range(n)]
+    return {d: {"2330": [600 + i, 0, 1e9], "2317": [100.0, 0, 1e9], "_TAIEX": [20000 + i, 0, 0]} for i, d in enumerate(days)}
+
+
+def test_price_series_keeps_last_130_closes():
+    from crawler import tw
+    hist = _tw_hist()
+    rows = tw.price_series(hist, ["2330", "9999"])
+    assert [r["ticker"] for r in rows] == ["2330"]          # a code with no prices is skipped
+    s = rows[0]["series"]
+    assert len(s) == tw.PRICE_SERIES_DAYS == 130
+    assert s[-1] == ["2026-05-20", 739.0] and s[0][0] < s[-1][0]
+
+
+def test_price_series_skips_days_without_the_ticker():
+    import datetime as dt
+    from crawler import tw
+    hist = {dt.date(2026, 5, 1): {"2330": [10.0, 0, 1]}, dt.date(2026, 5, 2): {}, dt.date(2026, 5, 3): {"2330": [11.0, 0, 1]}}
+    assert tw.price_series(hist, ["2330"])[0]["series"] == [["2026-05-01", 10.0], ["2026-05-03", 11.0]]
+    assert tw.price_series({dt.date(2026, 5, 1): {"2330": [10.0, 0, 1]}}, ["2330"]) == []  # one point is not a chart
+
+
+def test_save_price_series_covers_main_board_and_is_fail_soft():
+    import pandas as pd
+    from crawler import tw
+    from crawler.store import MemoryStore
+    scored = pd.DataFrame({"score": [90.0, 10.0], "board": ["tw_watch", "tw_main"]}, index=["2330", "2317"])
+    st = MemoryStore()
+    assert tw.save_price_series(st, _tw_hist(), scored) == 2
+    assert {k[0] for k in st.tables["tw_price_series"]} == {"2330", "2317"}
+
+    class Broken(MemoryStore):
+        def upsert(self, table, rows, on_conflict, chunk=500):
+            raise RuntimeError('relation "tw_price_series" does not exist')
+    assert tw.save_price_series(Broken(), _tw_hist(), scored) == 0   # table not created yet: the crawl goes on
