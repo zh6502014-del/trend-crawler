@@ -132,6 +132,8 @@ def metrics(ticker, exchange, ym, history, today=None):
 
     # Trailing-12-month revenue (thousand TWD); only when 12 consecutive months are on file.
     out["rev_ttm"] = sum(p[0] for p in pairs[:12]) if len(pairs) >= 12 else None
+    # This month's revenue vs the 11 months before it (needs 12 consecutive months on file). Not stored as a column.
+    out["rev_new_high"] = bool(len(pairs) >= 12 and pairs[0][0] > 0 and pairs[0][0] >= max(p[0] for p in pairs[1:12]))
     out["rev_3m_yoy"] = yoy(pairs[:3])
     out["rev_prev_3m_yoy"] = yoy(pairs[3:6])
     if out["rev_3m_yoy"] is not None and out["rev_prev_3m_yoy"] is not None:

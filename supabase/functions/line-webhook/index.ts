@@ -13,7 +13,7 @@ const env = (k) => (typeof Deno !== "undefined" ? Deno.env.get(k) : process.env[
 
 const TAGS = { insider_cluster: "內部人群買", insider_buy: "內部人買進", activist_13d: "13D 積極持有", new_5pct: "新增 5% 持有人" };
 const FLAGS = { short_runway: "現金撐不久", deep_loss: "虧損嚴重", high_debt: "高負債", dilution: "稀釋", thin_volume: "成交量薄",
-  micro_cap: "微型股", crowded: "擁擠", data_thin: "資料不足", high_pledge: "董監設質高", insider_selling: "內部人申報轉讓" };
+  micro_cap: "微型股", crowded: "擁擠", data_thin: "資料不足", high_pledge: "董監設質高", rev_high: "營收創高", insider_selling: "內部人申報轉讓" };
 const COLORS = { growth: "#2fbf8f", validated: "#6f86f2", accessibility: "#f2b44a", attention: "#ee6a7b" };
 
 // ── formatting helpers ──────────────────────────────────────────────────────
@@ -191,6 +191,7 @@ export function stockCard(s, smart, dash, extra = {}) {
     ] },
     ...(extra.spark ? [extra.spark, txt(`近 ${extra.n} 日分數 ${num(extra.first, 0)} → ${num(s.score, 0)}`, { size: "xs", color: "#8a93a6" })] : []),
     ...(delta != null ? [txt("7 日分數 " + (delta >= 0 ? "+" : "") + num(delta), { size: "xs", color: delta >= 0 ? "#2fbf8f" : "#ee6a7b" })] : []),
+    ...(extra.drivers ? [txt(extra.drivers, { size: "xs", color: "#8a93a6" })] : []),
     { type: "separator", margin: "md", color: "#2a3142" },
     bar("成長", s.growth, COLORS.growth), bar("驗證", s.validated, COLORS.validated),
     bar("進場", s.accessibility, COLORS.accessibility), bar("擁擠（越高越擠）", s.attention, COLORS.attention),
@@ -210,6 +211,37 @@ export const daysLeft = (d, now = Date.now()) => {
   const n = Math.ceil((Date.parse(d) - now) / 86400000);
   return isNaN(n) ? "" : n < 0 ? "（已截止）" : n === 0 ? "（今天）" : `（剩 ${n} 天）`;
 };
+
+// Why did the score move? score = 100 × geomean(成長, 驗證, 進場) × (1 − 0.6 × 擁擠), so the move splits exactly into
+// log-terms: Δscore = L × (Δln成長 + Δln驗證 + Δln進場)/3 + L × Δln(1 − 0.6 × 擁擠), L = logarithmic mean of old and new.
+// pts: oldest → newest rows with score and the four pillars (0–100). Compares the newest row with the latest row at least
+// `days` calendar days older. Returns null when it cannot be done honestly (missing data, zero pillar, formula mismatch).
+export const CROWD_WEIGHT = 0.6;   // crawler/config.py CROWD_WEIGHT
+const PILLAR_FLOOR = 2;            // crawler/config.py FLOOR (0.02) on the 0–100 scale; the score clips each pillar to it
+export function scoreDrivers(pts, days = 7, crowd = CROWD_WEIGHT) {
+  if (!pts || pts.length < 2) return null;
+  const cur = pts[pts.length - 1], cut = Date.parse(String(cur.as_of).slice(0, 10)) - days * 86400000;
+  let old = null;
+  for (const p of pts) if (Date.parse(String(p.as_of).slice(0, 10)) <= cut) old = p;
+  if (!old) return null;
+  const pillars = [["成長", "growth"], ["驗證", "validated"], ["進場", "accessibility"]];
+  const vals = (r) => ({ g: pillars.map(([, k]) => Math.max(Number(r[k]), PILLAR_FLOOR)), c: 1 - crowd * Number(r.attention) / 100, s: Number(r.score) });
+  const a = vals(old), b = vals(cur);
+  if ([...a.g, ...b.g, a.c, b.c, a.s, b.s].some((x) => !Number.isFinite(x) || x <= 0)) return null;
+  const delta = b.s - a.s;
+  const L = Math.abs(delta) < 1e-9 ? a.s : delta / Math.log(b.s / a.s);
+  const parts = pillars.map(([label], i) => ({ label, pts: L * Math.log(b.g[i] / a.g[i]) / 3 }));
+  parts.push({ label: "擁擠", pts: L * Math.log(b.c / a.c) });
+  const sum = parts.reduce((x, p) => x + p.pts, 0);
+  if (Math.abs(sum - delta) > 1.5) return null; // stored scores do not follow the formula (e.g. a scoring change): say nothing
+  return { delta, from: String(old.as_of).slice(0, 10), parts };
+}
+export function driversText(d) {
+  if (!d || Math.abs(d.delta) < 1) return null;
+  const top = d.parts.filter((p) => Math.abs(p.pts) >= 0.5).sort((x, y) => Math.abs(y.pts) - Math.abs(x.pts)).slice(0, 3);
+  if (!top.length) return null;
+  return `7 日變化來源：` + top.map((p) => `${p.label} ${p.pts >= 0 ? "+" : "−"}${Math.abs(p.pts).toFixed(1)}`).join("、");
+}
 
 // last N scores as a tiny bar sparkline (flex boxes, oldest → newest)
 export function sparkline(points) {
@@ -259,6 +291,7 @@ export function twStockCard(s, extra = {}) {
     ] },
     ...(extra.spark ? [extra.spark, txt(`近 ${extra.n} 日分數 ${num(extra.first, 0)} → ${num(s.score, 0)}`, { size: "xs", color: "#8a93a6" })] : []),
     ...(delta != null ? [txt("7 日分數 " + (delta >= 0 ? "+" : "") + num(delta), { size: "xs", color: delta >= 0 ? "#2fbf8f" : "#ee6a7b" })] : []),
+    ...(extra.drivers ? [txt(extra.drivers, { size: "xs", color: "#8a93a6" })] : []),
     { type: "separator", margin: "md", color: "#2a3142" },
     bar("成長", s.growth, COLORS.growth), bar("驗證", s.validated, COLORS.validated),
     bar("進場", s.accessibility, COLORS.accessibility), bar("擁擠（越高越擠）", s.attention, COLORS.attention),
@@ -512,9 +545,9 @@ async function twStock(cmd, db, dash) {
   const rows = await db.get(`tw_latest_board?ticker=eq.${enc(t)}&limit=1`);
   if (!rows.length) return [{ type: "text", text: `找不到 ${t}。只有已評分的台股查得到（上市櫃普通股，不含 ETF）。` }];
   const r = rows[0];
-  const hist = await db.get(`tw_scores?ticker=eq.${enc(t)}&order=as_of.desc&limit=14&select=as_of,score`).catch(() => []);
+  const hist = await db.get(`tw_scores?ticker=eq.${enc(t)}&order=as_of.desc&limit=14&select=as_of,score,growth,validated,accessibility,attention`).catch(() => []);
   const pts = hist.slice().reverse();
-  const extra = { spark: sparkline(pts), n: pts.length, first: pts[0] && pts[0].score };
+  const extra = { spark: sparkline(pts), n: pts.length, first: pts[0] && pts[0].score, drivers: driversText(scoreDrivers(pts)) };
   if (r.sector && r.board === "tw_main") {
     const peers = await db.get(`tw_latest_board?board=eq.tw_main&sector=eq.${enc(r.sector)}&select=ticker&order=score.desc&limit=200`).catch(() => []);
     const i = peers.findIndex((p) => p.ticker === t);
@@ -593,10 +626,10 @@ export async function run(cmd, db, ctx) {
       }
       const [sm, hist] = await Promise.all([
         db.get(`smart_money?ticker=eq.${enc(cmd.ticker)}&limit=1`),
-        db.get(`scores?ticker=eq.${enc(cmd.ticker)}&order=as_of.desc&limit=14&select=as_of,score`).catch(() => []),
+        db.get(`scores?ticker=eq.${enc(cmd.ticker)}&order=as_of.desc&limit=14&select=as_of,score,growth,validated,accessibility,attention`).catch(() => []),
       ]);
       const pts = hist.slice().reverse();
-      const extra = { spark: sparkline(pts), n: pts.length, first: pts[0] && pts[0].score };
+      const extra = { spark: sparkline(pts), n: pts.length, first: pts[0] && pts[0].score, drivers: driversText(scoreDrivers(pts)) };
       if (rows[0].sector && rows[0].board === "main") {
         const peers = await db.get(`latest_board?board=eq.main&sector=eq.${enc(rows[0].sector)}&select=ticker&order=score.desc&limit=200`).catch(() => []);
         const i = peers.findIndex((r) => r.ticker === cmd.ticker);

@@ -330,6 +330,10 @@ def compute_tw_scores(df: pd.DataFrame, max_main: int | None = None) -> pd.DataF
             main.loc[t] = False
     if main.sum() > max_main:
         main = main & (d["score"].where(main).rank(ascending=False, method="first") <= max_main)
+    for t in d.index:  # monthly revenue at a 12-month high (display flag only, does not change the score)
+        hi = d.loc[t].get("rev_new_high")
+        if hi is not None and hi == hi and bool(hi) and "rev_high" not in d.at[t, "flags"]:
+            d.at[t, "flags"] = [*d.at[t, "flags"], "rev_high"]
     d["board"] = np.where(main, "tw_main", "tw_watch")
     d["rank"] = d.groupby("board")["score"].rank(ascending=False, method="first").astype(int)
     return d

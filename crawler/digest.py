@@ -75,7 +75,30 @@ def watch_lines(watch: list[str], today: dict, prev: dict, smart: dict) -> list[
     return out
 
 
-def tw_lines(today_rows: list[dict], prev_rows: list[dict], watch_msgs: list[str] | None = None) -> list[str]:
+def revenue_lines(sig_cur: dict, sig_prev: dict, flags: dict, names: dict, watch: set, limit: int = 6) -> list[str]:
+    """Taiwan monthly-revenue announcements: names whose revenue month (ym) changed since the previous snapshot.
+
+    sig_cur / sig_prev: {ticker: tw_signals row with ym, rev_yoy, revenue_streak_months}; flags: {ticker: tw_scores.flags}.
+    Watchlist names come first, then the rest by YoY growth. Pure. Returns [] on the first snapshot (nothing to compare)."""
+    from .tw_revenue import month
+    out = []
+    for t, r in sig_cur.items():
+        p = sig_prev.get(t)
+        if not p or not r.get("ym") or r.get("ym") == p.get("ym") or r.get("rev_yoy") is None:
+            continue
+        m = month(r["ym"])
+        yoy = float(r["rev_yoy"]) * 100  # stored as a fraction (0.45 = +45%)
+        bits = [f"{m.month}月年增 {yoy:+.0f}%" if m else f"年增 {yoy:+.0f}%"]
+        if "rev_high" in (flags.get(t) or []):
+            bits.append("創12個月新高")
+        if (r.get("revenue_streak_months") or 0) >= 3:
+            bits.append(f"連{int(r['revenue_streak_months'])}月成長")
+        out.append((t in watch, yoy, f"{t}{names.get(t) or ''}　" + "，".join(bits)))
+    out.sort(key=lambda x: (not x[0], -x[1]))
+    return [x[2] for x in out[:limit]]
+
+
+def tw_lines(today_rows: list[dict], prev_rows: list[dict], watch_msgs: list[str] | None = None, rev_msgs: list[str] | None = None) -> list[str]:
     """Taiwan section: watchlist moves, new top-20 names, big score jumps, top-20 names with 法人買超. Pure."""
     cur = {r["ticker"]: r for r in today_rows if r.get("board") == "tw_main"}
     prev = {r["ticker"]: r for r in prev_rows if r.get("board") == "tw_main"}
@@ -84,6 +107,8 @@ def tw_lines(today_rows: list[dict], prev_rows: list[dict], watch_msgs: list[str
     out = []
     if watch_msgs:
         out.append("自選異動：\n" + "\n".join(watch_msgs[:8]))
+    if rev_msgs:
+        out.append("營收公告：\n" + "\n".join(rev_msgs[:6]))
     entered = sorted((r for r in top if r["ticker"] not in prev_top), key=lambda r: r["rank"]) if prev else []
     if entered:
         out.append("新進前 20 名：" + "、".join(f"{r['ticker']}{r.get('name') or ''}（第{r['rank']}名）" for r in entered[:6]))
@@ -280,7 +305,20 @@ def taiwan_section(store, today: dt.date, watch: list[str], alerts: list[dict]) 
         if len(dates) > 1:
             wp = {r["ticker"]: r for r in store.select("tw_scores", {"select": cols, "as_of": f"eq.{dates[1]}", "ticker": lst})}
     fired = check_alerts(alerts, wt)
-    lines = tw_lines(cur, prev, watch_lines(watch, wt, wp, {}))
+    rev_msgs = []
+    if len(dates) > 1:
+        try:  # revenue announcements for watchlist names and the top 20; a failure here must not stop the digest
+            focus = sorted(set(watch) | {r["ticker"] for r in cur if (r.get("rank") or 999) <= TOP_N})
+            lst2 = "in.(" + ",".join(focus) + ")"
+            scols = "ticker,ym,rev_yoy,revenue_streak_months"
+            sc = {r["ticker"]: r for r in store.select("tw_signals", {"select": scols, "as_of": f"eq.{dates[0]}", "ticker": lst2})} if focus else {}
+            sp = {r["ticker"]: r for r in store.select("tw_signals", {"select": scols, "as_of": f"eq.{dates[1]}", "ticker": lst2})} if focus else {}
+            fl = {r["ticker"]: r.get("flags") for r in cur}
+            fl.update({t: r.get("flags") for t, r in wt.items()})
+            rev_msgs = revenue_lines(sc, sp, fl, {r["ticker"]: r.get("name") for r in cur}, set(watch))
+        except Exception as e:  # noqa: BLE001
+            print(f"  digest: revenue announcements skipped ({str(e)[:80]})")
+    lines = tw_lines(cur, prev, watch_lines(watch, wt, wp, {}), rev_msgs)
     return ({"as_of": str(dates[0])[:10], "lines": lines} if lines else None), fired
 
 

@@ -195,6 +195,21 @@ create policy read_authenticated on public.smart_money for select to authenticat
 grant select on public.insider_trades, public.holder_filings, public.smart_money to authenticated;
 grant all on public.insider_trades, public.holder_filings, public.smart_seen, public.smart_money to service_role;
 
+-- Daily smart-money snapshots (same as migrations/20261128_smart_money_history.sql)
+create table if not exists public.smart_money_history (
+  as_of date not null,
+  ticker text not null,
+  score numeric default 0,
+  tags jsonb default '[]'::jsonb,
+  buyers_30d int, buy_value_30d numeric, officer_buyers_30d int,
+  sellers_30d int, sell_value_30d numeric,
+  n_13d_90d int, n_13g_90d int,
+  primary key (as_of, ticker)
+);
+alter table public.smart_money_history enable row level security;
+revoke all on public.smart_money_history from anon, authenticated;
+grant all on public.smart_money_history to service_role;
+
 -- ── Report card (how past top-20 lists did vs SPY) ──
 create table if not exists public.report_card (as_of date not null, horizon int not null, n int, avg_ret numeric, spy_ret numeric, excess numeric, hit_rate numeric, best text, best_ret numeric, worst text, worst_ret numeric, exit_day date, primary key (as_of, horizon));
 alter table public.report_card add column if not exists top10_ret numeric;

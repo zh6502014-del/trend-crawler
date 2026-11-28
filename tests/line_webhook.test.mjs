@@ -335,3 +335,39 @@ test("tabbed rich menus: geometry and switch actions", () => {
   assert.equal(a[2].bounds.y, MENU_TAB_H);
   assert.equal(a[7].action.text, "更多功能");
 });
+
+// ── score drivers (2026-11-28) ──
+import { scoreDrivers, driversText } from "../supabase/functions/line-webhook/index.ts";
+// same formula as crawler/score.py: pillars 0–100, each floored at 2, score = geomean × (1 − 0.6 × 擁擠)
+const mk = (as_of, g, v, a, att) => ({ as_of, growth: g, validated: v, accessibility: a, attention: att,
+  score: Math.round(Math.cbrt(Math.max(g, 2) * Math.max(v, 2) * Math.max(a, 2)) * (1 - 0.6 * att / 100) * 100) / 100 });
+
+test("scoreDrivers: parts add up to the score change and name the biggest mover", () => {
+  const pts = [mk("2026-11-12", 60, 50, 70, 30), mk("2026-11-18", 62, 52, 70, 30), mk("2026-11-19", 80, 50, 72, 35)];
+  const d = scoreDrivers(pts); // newest = 11-19, base = latest row at least 7 days older = 11-12
+  assert.equal(d.from, "2026-11-12");
+  assert.ok(Math.abs(d.parts.reduce((s, p) => s + p.pts, 0) - d.delta) < 0.2);
+  const by = Object.fromEntries(d.parts.map((p) => [p.label, p.pts]));
+  assert.ok(by["成長"] > 0 && by["擁擠"] < 0 && Math.abs(by["驗證"]) < Math.abs(by["成長"]));
+  assert.match(driversText(d), /^7 日變化來源：成長 \+/);
+});
+
+test("scoreDrivers: says nothing when it cannot be honest", () => {
+  assert.equal(scoreDrivers([mk("2026-11-19", 70, 50, 72, 40)]), null);                                      // one point
+  assert.equal(scoreDrivers([mk("2026-11-17", 60, 50, 70, 30), mk("2026-11-19", 70, 50, 72, 40)]), null);   // nothing 7 days old
+  const floored = scoreDrivers([mk("2026-11-10", 60, 0, 70, 30), mk("2026-11-19", 70, 50, 72, 40)]);          // a 0 pillar is floored at 2, like the score
+  assert.ok(floored && Math.abs(floored.parts.reduce((s, p) => s + p.pts, 0) - floored.delta) < 0.2);
+  assert.equal(scoreDrivers([{ ...mk("2026-11-10", 60, 50, 70, 30), attention: null }, mk("2026-11-19", 70, 50, 72, 40)]), null); // missing data
+  const off = [{ ...mk("2026-11-10", 60, 50, 70, 30), score: 10 }, mk("2026-11-19", 70, 50, 72, 40)];        // score not from the formula
+  assert.equal(scoreDrivers(off), null);
+  assert.equal(driversText(null), null);
+  const flat = [mk("2026-11-10", 60, 50, 70, 30), mk("2026-11-19", 60, 50, 70, 30)];
+  assert.equal(driversText(scoreDrivers(flat)), null);                                                        // no move, no line
+});
+
+test("stock card shows the drivers line only when given", () => {
+  const s = { ticker: "AAA", name: "A", score: 70, rank: 3, board: "main", growth: 70, validated: 50, accessibility: 72, attention: 40, flags: [] };
+  const has = (c) => JSON.stringify(c).includes("7 日變化來源");
+  assert.equal(has(stockCard(s, null, "", { drivers: "7 日變化來源：成長 +4.0" })), true);
+  assert.equal(has(stockCard(s, null, "", {})), false);
+});

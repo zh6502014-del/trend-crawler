@@ -333,5 +333,26 @@ def run_smart(store, today: dt.date | None = None) -> dict:
     if out:
         store.upsert("smart_money", out, "ticker")
     stats["signals"] = len(out)
+    stats["history"] = snapshot_history(store, out, as_of)
     print(f"  smart money: {stats}")
     return stats
+
+
+HISTORY_COLS = ("score", "tags", "buyers_30d", "buy_value_30d", "officer_buyers_30d", "sellers_30d", "sell_value_30d", "n_13d_90d", "n_13g_90d")
+
+
+def snapshot_history(store, rows: list[dict], as_of) -> int:
+    """Keep one row per ticker per day for tickers with any activity, so the signal can be tested later. Never fatal:
+    until migrations/20261128_smart_money_history.sql is applied this just prints a note."""
+    day = as_of.isoformat() if hasattr(as_of, "isoformat") else str(as_of)[:10]
+    keep = [{"as_of": day, "ticker": r["ticker"], **{c: r.get(c) for c in HISTORY_COLS}} for r in rows
+            if (r.get("score") or 0) > 0 or (r.get("sellers_30d") or 0) > 0 or (r.get("buyers_30d") or 0) > 0
+            or (r.get("n_13d_90d") or 0) > 0 or (r.get("n_13g_90d") or 0) > 0]
+    if not keep:
+        return 0
+    try:
+        store.upsert("smart_money_history", keep, "as_of,ticker")
+    except Exception as e:  # noqa: BLE001
+        print(f"  smart money history skipped (run migrations/20261128_smart_money_history.sql): {str(e)[:100]}")
+        return 0
+    return len(keep)
